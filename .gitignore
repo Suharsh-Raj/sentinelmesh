@@ -40,3 +40,9 @@ oauth_token*.json
 oauth-token*.json
 secrets.json
 .secrets/
+
+# Private Gmail data and local-only configuration
+/.gmail-data/
+/gmail.toml
+/oauth-client.json
+*.log

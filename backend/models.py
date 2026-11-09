@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import String, Text, Integer, Boolean, DateTime, JSON
+from sqlalchemy import String, Text, Integer, Boolean, DateTime, Index, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 from .database import Base
 
@@ -20,6 +20,7 @@ class Event(Base):
 
 class Email(Base):
     __tablename__ = "emails"
+    __table_args__ = (Index("uq_email_external", "source", "account_key", "external_message_id", unique=True),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     sender: Mapped[str] = mapped_column(String(320))
     display_name: Mapped[str] = mapped_column(String(200), default="")
@@ -35,6 +36,21 @@ class Email(Base):
     processed: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     ml_analysis: Mapped[dict | None] = mapped_column(JSON(none_as_null=True), nullable=True)
+    source: Mapped[str] = mapped_column(String(20), default="simulated", server_default="simulated")
+    account_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    external_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source_label: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    content_limits: Mapped[list | None] = mapped_column(JSON(none_as_null=True), nullable=True)
+
+
+class GmailSyncState(Base):
+    __tablename__ = "gmail_sync"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_key: Mapped[str] = mapped_column(String(64))
+    cutoff_ms: Mapped[int] = mapped_column(Integer)
+    history_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    last_success: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 class LedgerEntry(Base):
     __tablename__ = "ledger"

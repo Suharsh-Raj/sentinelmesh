@@ -12,6 +12,7 @@ def main():
         raise SystemExit("Build the frontend before exporting the Pages preview.")
 
     # The seeders and route functions share this fresh database for the export.
+    os.environ["MAIL_SOURCE"] = "simulated"
     os.environ["SENTINELMESH_DB"] = ":memory:"
     from backend import main as api
     from backend.database import Base, engine

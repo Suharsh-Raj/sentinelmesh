@@ -1,0 +1,5 @@
+# Copy as gmail.toml into the user-local Gmail directory documented in README.
+# Set this to the specific account you intend to authorize.
+account = "mailbox@example.com"
+# Relative to the user-local Gmail directory. Keep this file outside the repo.
+client_file = "oauth-client.json"

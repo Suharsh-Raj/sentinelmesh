@@ -318,3 +318,19 @@ tbody td { color: #344054; font-size: 12px; }
   .page-heading h1 { font-size: 25px; }
   .stat-value { font-size: 26px; }
 }
+.mail-source-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 16px;
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  border: 1px solid #dfe6ee;
+  border-radius: 10px;
+  background: #fff;
+  color: #526173;
+  font-size: 13px;
+}
+.mail-source-status strong { color: #25313d; }
+.mail-sync-error { color: #923c17; }
+.gmail-source-label { display: block; margin-top: 3px; color: #526173; }

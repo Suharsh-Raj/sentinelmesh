@@ -1,14 +1,15 @@
 import asyncio, json
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import Depends, FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import update
-from .database import engine, ensure_schema, SessionLocal
+from .database import MAIL_SOURCE, initialize_database, SessionLocal
 from .models import Email, Event, LedgerEntry, Allowlist, LinkScan, Incident
 from .mail_model import MailModel, load_mail_model
+from .gmail_sync import GmailSync
 from .agents.mail_agent import MailAgent
 from .event_bus import bus
 from .agents.link_agent import LinkAgent, analyze_file as analyze_uploaded_file
@@ -19,9 +20,13 @@ mail_model = MailModel("unavailable", error="The local model has not been initia
 link_agent = LinkAgent()
 chief_agent = ChiefAgent()
 bus.add_handler(chief_agent.handle)
+gmail_sync = None
+LOCAL_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
 def serialize(obj):
     out = {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
+    if isinstance(obj, Email):
+        out.pop("account_key", None)
     for k, v in out.items():
         if isinstance(v, datetime):
             # SQLite drops timezone metadata even for DateTime(timezone=True).
@@ -100,25 +105,70 @@ async def mail_poller():
             print(f"MailAgent poller error: {type(exc).__name__}")
         await asyncio.sleep(4)
 
+async def gmail_poller(sync, shutdown):
+    while not shutdown.is_set():
+        delay = await asyncio.to_thread(sync.poll)
+        try:
+            await asyncio.wait_for(shutdown.wait(), timeout=delay)
+        except TimeoutError:
+            pass
+
+
 @asynccontextmanager
 async def lifespan(app):
-    global mail_model
-    ensure_schema(engine)
+    global mail_model, gmail_sync
+    initialize_database()
     mail_model = await asyncio.to_thread(load_mail_model)
-    from .seed import seed_database
-    seed_database()
-    from .seed_links import seed_links
-    seed_links()
+    shutdown = asyncio.Event()
+    gmail_task = None
+    if MAIL_SOURCE == "simulated":
+        seed_simulated_data()
+    else:
+        gmail_sync = GmailSync(SessionLocal)
+        gmail_task = asyncio.create_task(gmail_poller(gmail_sync, shutdown))
     poller = asyncio.create_task(mail_poller())
     try:
         yield
     finally:
+        if gmail_task is not None:
+            gmail_sync.stop.set()
+            shutdown.set()
         poller.cancel()
         try: await poller
         except asyncio.CancelledError: pass
+        if gmail_task is not None:
+            await gmail_task
+            gmail_sync = None
+
+
+def seed_simulated_data():
+    from .seed import seed_database
+    from .seed_links import seed_links
+    seed_database()
+    seed_links()
 
 app = FastAPI(title="SentinelMesh", version="1.0.0", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=LOCAL_ORIGINS, allow_methods=["*"], allow_headers=["*"])
+
+@app.middleware("http")
+async def prevent_private_caching(request, call_next):
+    if MAIL_SOURCE == "gmail" and (
+        request.headers.get("host", "").split(":", 1)[0].lower() not in ("localhost", "127.0.0.1")
+        or request.headers.get("sec-fetch-site") == "cross-site"
+        or request.headers.get("origin") not in (None, *LOCAL_ORIGINS)
+    ):
+        return JSONResponse({"detail": "Use Gmail mode from the local SentinelMesh dashboard."},
+                            status_code=403, headers={"Cache-Control": "no-store"})
+    response = await call_next(request)
+    if MAIL_SOURCE == "gmail":
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def require_simulated():
+    if MAIL_SOURCE != "simulated":
+        raise HTTPException(403, "Demo injection and reset are unavailable in Gmail mode.")
+
 
 class EmailInput(BaseModel):
     sender: str = Field(max_length=320)
@@ -131,8 +181,9 @@ class EmailInput(BaseModel):
 @app.get("/api/health")
 def health(): return {"status": "ok", "service": "SentinelMesh", "agents": ["MailAgent", "LinkAgent", "ChiefAgent"]}
 
-@app.post("/api/emails")
+@app.post("/api/emails", dependencies=[Depends(require_simulated)])
 async def submit_email(payload: EmailInput):
+    require_simulated()
     data = payload.model_dump()
     with SessionLocal() as db:
         email = Email(sender=data["sender"], display_name=data["display_name"], subject=data["subject"], body=data["body"], urls=data["urls"], reply_to=data["reply_to"], verdict="PENDING", risk_score=0, reasons=["Queued for automatic MailAgent inbox processing."], folder="Inbox", processed=False)
@@ -158,7 +209,7 @@ def get_ledger():
 def get_stats():
     with SessionLocal() as db:
         emails=db.query(Email).all(); entries=db.query(LedgerEntry).all()
-        return {"emails_scanned":len(emails),"blocked":sum(e.verdict in ("BLOCK","QUARANTINE") and not e.revoked for e in emails),"links_analyzed":db.query(LinkScan).count(),"incidents":db.query(Incident).count(),"revoked":sum(e.status=="REVOKED" for e in entries),"verdicts":{v:sum(e.verdict==v for e in emails) for v in ("ALLOW","QUARANTINE","BLOCK")},"ml_model":mail_model.describe()}
+        return {"emails_scanned":len(emails),"blocked":sum(e.verdict in ("BLOCK","QUARANTINE") and not e.revoked for e in emails),"links_analyzed":db.query(LinkScan).count(),"incidents":db.query(Incident).count(),"revoked":sum(e.status=="REVOKED" for e in entries),"verdicts":{v:sum(e.verdict==v for e in emails) for v in ("ALLOW","QUARANTINE","BLOCK")},"ml_model":mail_model.describe(),"mail_source":MAIL_SOURCE,"gmail_sync":gmail_sync.describe() if gmail_sync else None}
 
 class LinkInput(BaseModel):
     url: str = Field(max_length=4096)
@@ -236,13 +287,12 @@ async def stream():
         finally: bus.unsubscribe(queue)
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
-@app.post("/api/reset")
+@app.post("/api/reset", dependencies=[Depends(require_simulated)])
 def reset():
+    require_simulated()
     from sqlalchemy import delete
     with SessionLocal() as db:
         for model in (LedgerEntry, Event, Email, Allowlist, LinkScan, Incident): db.execute(delete(model))
         db.commit()
-    from .seed import seed_database
-    from .seed_links import seed_links
-    seed_database(); seed_links()
+    seed_simulated_data()
     return {"status": "reset"}
