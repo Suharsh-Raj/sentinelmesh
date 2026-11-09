@@ -11,7 +11,7 @@ npm ci --cache .npm-cache
 python run.py
 ~~~
 
-The launcher creates the app's `.venv` and installs the backend requirements on first run. It starts the dashboard at [127.0.0.1:5173](http://127.0.0.1:5173) and prints the API address. Press Ctrl+C to stop the services. The default database is `backend/sentinelmesh.db`. Use `SENTINELMESH_DB` to select a separate SQLite file for local verification.
+The launcher uses `.ml-venv` when it exists and ML is enabled. Otherwise it creates or reuses `.venv`. It installs the selected backend requirements on first run, starts the dashboard at [127.0.0.1:5173](http://127.0.0.1:5173), and prints the API address. Press Ctrl+C to stop the services. The default database is `backend/sentinelmesh.db`. Use `SENTINELMESH_DB` to select a separate SQLite file for local verification.
 
 Open **Demo controls** to submit a mail or link scenario. **Link Lab** shows the simulation timeline and static findings. Uploaded files are inspected in memory, and the simulated sandbox does not execute them or visit submitted URLs. **Decision Ledger** shows the original score and evidence. Revoke updates the existing ledger entry, records a separate event, and moves linked mail back to the local Inbox while allowlisting its sender. Reset demo data clears local decisions and the allowlist before reseeding. Gmail ingestion is future work. [Architecture and event flow](ARCHITECTURE.md)
 
@@ -23,9 +23,11 @@ $env:SENTINELMESH_DB = ':memory:'
 Remove-Item Env:SENTINELMESH_DB
 ~~~
 
-## Train and use the offline classifier
+## Advisory ML mail analysis
 
-Phase 1 produced `mail-tfidf-v1`, a TF-IDF and logistic regression pipeline. The CLI scores local text separately from the running application. The model uses an uncalibrated class-1 score and a threshold chosen on validation data. MailAgent's live demo decisions continue to use its rules.
+SentinelMesh loads the trusted local `mail-tfidf-v1` bundle once at startup. Newly processed mail gets an experimental prediction, including mail from allowlisted senders. Message details and the Decision Ledger show the model result separately from the rule score and evidence. The model uses an uncalibrated class-1 score and the threshold stored in its manifest. Rules determine the verdict, folder, and allowlist actions. Seeded and historical rows are displayed as “Not analyzed by ML.” Gmail is not connected.
+
+The default bundle directory is `ml/models/mail-tfidf-v1`. Restore the local Phase 1 bundle from a trusted backup or follow the training instructions below on a clean clone. Set `SENTINELMESH_MODEL_DIR` to use another trusted copy of that bundle. Set `SENTINELMESH_ML_ENABLED=0` before running the launcher to disable ML. With a missing, corrupt, or incompatible bundle, the dashboard and `GET /api/stats` show the model status and rules continue to process mail. The email, event, and ledger snapshots record whether an ML result was available.
 
 The recorded run used CPython **3.13.8** in a dedicated `.ml-venv` and the [pinned ML requirements](ml/requirements.txt). From the project root, create the environment and install the pinned packages:
 
@@ -36,8 +38,12 @@ $env:TMP = $env:TEMP
 $env:PIP_CACHE_DIR = Join-Path $mlCache 'pip'
 New-Item -ItemType Directory -Force -Path $env:TEMP,$env:PIP_CACHE_DIR | Out-Null
 py -3.13 -B -m venv .ml-venv
-& .\.ml-venv\Scripts\python.exe -B -m pip --isolated install --cache-dir $env:PIP_CACHE_DIR --only-binary=:all: --index-url https://pypi.org/simple -r ml/requirements.txt
+& .\.ml-venv\Scripts\python.exe -B -m pip --isolated install --cache-dir $env:PIP_CACHE_DIR --only-binary=:all: --index-url https://pypi.org/simple -r backend/requirements-ml.txt
 ~~~
+
+The application validates the exact Python patch and package versions against the manifest. Once the bundle and environment are in place, run `python run.py`. Run the application tests with `.ml-venv\Scripts\python.exe` in the isolated test command above to include the real model smoke test.
+
+### Reproduce or inspect the offline bundle
 
 Follow the verified CSV download commands in the [ML setup guide](ml/README.md). Then run the tests and train offline:
 

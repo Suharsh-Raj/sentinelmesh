@@ -4,7 +4,7 @@ from pathlib import Path
 
 ROOT=Path(__file__).resolve().parent
 VENV=ROOT/".venv"
-PYTHON=VENV/("Scripts/python.exe" if os.name=="nt" else "bin/python")
+PYTHON_ENTRY=Path("Scripts/python.exe" if os.name=="nt" else "bin/python")
 NPM="npm.cmd" if os.name=="nt" else "npm"
 
 def run_setup(command):
@@ -15,15 +15,25 @@ def relay(proc,label):
     for line in iter(proc.stdout.readline,""):
         print(f"[{label}] {line}",end="",flush=True)
 
-def main():
-    if not PYTHON.exists():
+def prepare_backend():
+    ml_venv = ROOT / ".ml-venv"
+    use_ml_env = (ml_venv / PYTHON_ENTRY).is_file() and os.getenv("SENTINELMESH_ML_ENABLED") != "0"
+    venv = ml_venv if use_ml_env else VENV
+    python = venv / PYTHON_ENTRY
+    if not python.is_file():
         print("[setup] Creating local Python environment…",flush=True)
-        run_setup([sys.executable,"-m","venv",str(VENV)])
-    marker=VENV/".sentinelmesh-deps"
+        run_setup([sys.executable,"-m","venv",str(venv)])
+    marker = venv / (".sentinelmesh-app-ml-deps" if use_ml_env else ".sentinelmesh-deps")
     if not marker.exists():
         print("[setup] Installing backend dependencies…",flush=True)
-        run_setup([str(PYTHON),"-m","pip","install","-r",str(ROOT/"backend"/"requirements.txt")])
+        requirements = "requirements-ml.txt" if use_ml_env else "requirements.txt"
+        run_setup([str(python),"-m","pip","install","-r",str(ROOT/"backend"/requirements)])
         marker.write_text("installed",encoding="utf-8")
+    return python
+
+
+def main():
+    python = prepare_backend()
     if not (ROOT/"node_modules"/"vite").exists():
         print("[setup] Installing frontend dependencies…",flush=True)
         run_setup([NPM,"install","--cache",str(ROOT/".npm-cache")])
@@ -38,7 +48,7 @@ def main():
                 except OSError:
                     api_port+=1
         if api_port>=8100:raise RuntimeError("No free local API port found in the 8000–8099 range.")
-        backend=subprocess.Popen([str(PYTHON),"-m","uvicorn","backend.main:app","--host","127.0.0.1","--port",str(api_port)],cwd=ROOT,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1)
+        backend=subprocess.Popen([str(python),"-m","uvicorn","backend.main:app","--host","127.0.0.1","--port",str(api_port)],cwd=ROOT,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1)
         procs.append(backend)
         # Vite proxies /api (including EventSource) to the exact API port
         # selected above; the browser never needs to assume port 8000.

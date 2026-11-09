@@ -20,6 +20,10 @@ class EventBus:
         for handler in self.handlers:
             result = handler(event)
             if hasattr(result, "__await__"): await result
+        self.broadcast(event)
+
+    def broadcast(self, event):
+        """Notify subscribers after the decision has already been committed."""
         for queue in list(self.subscribers):
             if queue.full():
                 try: queue.get_nowait()

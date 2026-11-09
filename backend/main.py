@@ -5,14 +5,17 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from .database import Base, engine, SessionLocal
+from sqlalchemy import update
+from .database import engine, ensure_schema, SessionLocal
 from .models import Email, Event, LedgerEntry, Allowlist, LinkScan, Incident
+from .mail_model import MailModel, load_mail_model
 from .agents.mail_agent import MailAgent
 from .event_bus import bus
 from .agents.link_agent import LinkAgent, analyze_file as analyze_uploaded_file
 from .agents.chief_agent import ChiefAgent
 
 mail_agent = MailAgent()
+mail_model = MailModel("unavailable", error="The local model has not been initialized.")
 link_agent = LinkAgent()
 chief_agent = ChiefAgent()
 bus.add_handler(chief_agent.handle)
@@ -41,7 +44,7 @@ async def emit(agent, kind, target, decision, score, reasoning, evidence, data=N
     return event
 
 async def process_pending_emails():
-    """Score queued inbox rows and publish the decision for ChiefAgent/SSE."""
+    """Persist each mail decision and its snapshots before publishing to SSE."""
     with SessionLocal() as db:
         pending = db.query(Email).filter(Email.processed.is_(False)).order_by(Email.id.asc()).limit(50).all()
         pending_ids = [email.id for email in pending]
@@ -50,17 +53,43 @@ async def process_pending_emails():
             email = db.get(Email, email_id)
             if email is None or email.processed:
                 continue
+            subject, body, created_at = email.subject, email.body, email.created_at
+
+        ml_analysis = await mail_model.analyze(subject, body)
+        with SessionLocal.begin() as db:
+            email = db.get(Email, email_id)
+            if email is None or email.processed or email.created_at != created_at:
+                continue
             allowed = db.query(Allowlist).filter(Allowlist.sender == email.sender.lower()).first() is not None
             result = mail_agent.analyze({"sender":email.sender,"display_name":email.display_name,"subject":email.subject,"body":email.body,"urls":email.urls or [],"reply_to":email.reply_to,"allowlisted":allowed})
-            email.verdict = result["verdict"]
-            email.risk_score = result["risk_score"]
-            email.reasons = result["reasons"]
-            email.folder = "Quarantine" if result["verdict"] in ("BLOCK", "QUARANTINE") else "Inbox"
-            email.processed = True
-            db.commit()
-            sender, subject, reasoning, evidence = email.sender, email.subject, " ".join(result["reasons"]), result["reasons"]
-        # Commit before publishing: retries cannot create duplicate decisions.
-        await emit("MailAgent", "email_analyzed", sender, result["verdict"], result["risk_score"], reasoning, evidence, {"email_id":email_id,"subject":subject})
+            verdict = result["verdict"]
+            evidence = result["reasons"]
+            # Only the transaction that claims this queued row may add records.
+            claimed = db.execute(
+                update(Email)
+                .where(Email.id == email_id, Email.processed.is_(False), Email.created_at == created_at)
+                .values(
+                    verdict=verdict, risk_score=result["risk_score"], reasons=evidence,
+                    folder="Quarantine" if verdict in ("BLOCK", "QUARANTINE") else "Inbox",
+                    processed=True, ml_analysis=ml_analysis,
+                )
+            )
+            if claimed.rowcount != 1:
+                continue
+            event = {
+                "timestamp": datetime.now(timezone.utc),
+                "agent": "MailAgent",
+                "event_type": "email_analyzed",
+                "target": email.sender,
+                "decision": verdict,
+                "risk_score": result["risk_score"],
+                "reasoning": " ".join(evidence),
+                "evidence": evidence,
+                "data": {"email_id": email_id, "subject": subject, "ml_analysis": ml_analysis},
+            }
+            db.add(Event(**event))
+            chief_agent.record_decision(db, event)
+        bus.broadcast(event)
 
 async def mail_poller():
     while True:
@@ -68,21 +97,14 @@ async def mail_poller():
             await process_pending_emails()
         except Exception as exc:
             # Keep the inbox watcher alive after an individual database/event error.
-            print(f"MailAgent poller error: {exc}")
+            print(f"MailAgent poller error: {type(exc).__name__}")
         await asyncio.sleep(4)
 
 @asynccontextmanager
 async def lifespan(app):
-    Base.metadata.create_all(engine)
-    # Upgrade databases created before the pending-inbox watcher was added.
-    from sqlalchemy import inspect, text
-    existing_email_columns = {column["name"] for column in inspect(engine).get_columns("emails")}
-    if "processed" not in existing_email_columns:
-        with engine.begin() as connection:
-            connection.execute(text("ALTER TABLE emails ADD COLUMN processed BOOLEAN NOT NULL DEFAULT 1"))
-    if "reply_to" not in existing_email_columns:
-        with engine.begin() as connection:
-            connection.execute(text("ALTER TABLE emails ADD COLUMN reply_to VARCHAR(320) NOT NULL DEFAULT ''"))
+    global mail_model
+    ensure_schema(engine)
+    mail_model = await asyncio.to_thread(load_mail_model)
     from .seed import seed_database
     seed_database()
     from .seed_links import seed_links
@@ -115,7 +137,7 @@ async def submit_email(payload: EmailInput):
     with SessionLocal() as db:
         email = Email(sender=data["sender"], display_name=data["display_name"], subject=data["subject"], body=data["body"], urls=data["urls"], reply_to=data["reply_to"], verdict="PENDING", risk_score=0, reasons=["Queued for automatic MailAgent inbox processing."], folder="Inbox", processed=False)
         db.add(email); db.commit(); db.refresh(email)
-        return {"verdict":"PENDING","risk_score":0,"reasons":email.reasons,"email_id":email.id,"folder":"Inbox","processed":False}
+        return {"verdict":"PENDING","risk_score":0,"reasons":email.reasons,"email_id":email.id,"folder":"Inbox","processed":False,"ml_analysis":None}
 
 @app.get("/api/emails")
 def get_emails(folder: str | None = None):
@@ -136,7 +158,7 @@ def get_ledger():
 def get_stats():
     with SessionLocal() as db:
         emails=db.query(Email).all(); entries=db.query(LedgerEntry).all()
-        return {"emails_scanned":len(emails),"blocked":sum(e.verdict in ("BLOCK","QUARANTINE") and not e.revoked for e in emails),"links_analyzed":db.query(LinkScan).count(),"incidents":db.query(Incident).count(),"revoked":sum(e.status=="REVOKED" for e in entries),"verdicts":{v:sum(e.verdict==v for e in emails) for v in ("ALLOW","QUARANTINE","BLOCK")}}
+        return {"emails_scanned":len(emails),"blocked":sum(e.verdict in ("BLOCK","QUARANTINE") and not e.revoked for e in emails),"links_analyzed":db.query(LinkScan).count(),"incidents":db.query(Incident).count(),"revoked":sum(e.status=="REVOKED" for e in entries),"verdicts":{v:sum(e.verdict==v for e in emails) for v in ("ALLOW","QUARANTINE","BLOCK")},"ml_model":mail_model.describe()}
 
 class LinkInput(BaseModel):
     url: str = Field(max_length=4096)
@@ -196,7 +218,10 @@ async def revoke(entry_id: int, who: str = "Operator"):
             email.folder = "Inbox"; email.revoked = True
             if not db.query(Allowlist).filter(Allowlist.sender == email.sender.lower()).first(): db.add(Allowlist(sender=email.sender.lower()))
         db.commit(); db.refresh(entry); result = serialize(entry)
-    event = await emit("ChiefAgent", "decision_revoked", entry.target, "REVOKED", entry.risk_score, f"Operator {who} revoked the decision.", entry.evidence, {"ledger_id": entry_id})
+    event_data = {"ledger_id": entry_id}
+    if entry.agent == "MailAgent":
+        event_data["ml_analysis"] = entry.ml_analysis
+    await emit("ChiefAgent", "decision_revoked", entry.target, "REVOKED", entry.risk_score, f"Operator {who} revoked the decision.", entry.evidence, event_data)
     return result
 
 @app.get("/api/stream")
