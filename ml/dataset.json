@@ -1,0 +1,31 @@
+{
+  "title": "Phishing Email Curated Datasets",
+  "release": "Zenodo record 8339691, version v1",
+  "doi": "10.5281/zenodo.8339691",
+  "source_url": "https://zenodo.org/records/8339691",
+  "license_metadata_url": "https://zenodo.org/api/records/8339691",
+  "license": "CC-BY-4.0",
+  "license_url": "https://creativecommons.org/licenses/by/4.0/",
+  "creators": ["Arifa Islam Champa", "Md Fazle Rabbi", "Minhaz Fahim Zibran"],
+  "retrieved_date": "2026-11-09",
+  "files": [
+    {
+      "name": "Enron.csv",
+      "source": "enron",
+      "upstream_corpus_url": "https://www.cs.cmu.edu/~enron/",
+      "url": "https://zenodo.org/api/records/8339691/files/Enron.csv/content",
+      "bytes": 44837129,
+      "published_md5": "10489e0fdcc8af6fe62135c689367d40",
+      "sha256": "11f28a5bdd3603f1829681ab6b55071b5f9af781b4e6694e39216b2996a96883"
+    },
+    {
+      "name": "Nazario.csv",
+      "source": "nazario",
+      "upstream_corpus_url": "https://monkey.org/~jose/phishing/",
+      "url": "https://zenodo.org/api/records/8339691/files/Nazario.csv/content",
+      "bytes": 7811841,
+      "published_md5": "4022d055bb7cf8602f30f768f652e91e",
+      "sha256": "b8fbc4158fbdfaff1ed98584c43d72e283c6352d7ade4d457d34c1d79488d184"
+    }
+  ]
+}

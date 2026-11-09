@@ -1,0 +1,257 @@
+{
+  "trained_at_utc": "2026-11-09T16:19:49.427276+00:00",
+  "dataset": {
+    "title": "Phishing Email Curated Datasets",
+    "release": "Zenodo record 8339691, version v1",
+    "doi": "10.5281/zenodo.8339691",
+    "source_url": "https://zenodo.org/records/8339691",
+    "license_metadata_url": "https://zenodo.org/api/records/8339691",
+    "license": "CC-BY-4.0",
+    "license_url": "https://creativecommons.org/licenses/by/4.0/",
+    "creators": [
+      "Arifa Islam Champa",
+      "Md Fazle Rabbi",
+      "Minhaz Fahim Zibran"
+    ],
+    "retrieved_date": "2026-11-09",
+    "files": [
+      {
+        "name": "Enron.csv",
+        "source": "enron",
+        "upstream_corpus_url": "https://www.cs.cmu.edu/~enron/",
+        "url": "https://zenodo.org/api/records/8339691/files/Enron.csv/content",
+        "bytes": 44837129,
+        "published_md5": "10489e0fdcc8af6fe62135c689367d40",
+        "sha256": "11f28a5bdd3603f1829681ab6b55071b5f9af781b4e6694e39216b2996a96883"
+      },
+      {
+        "name": "Nazario.csv",
+        "source": "nazario",
+        "upstream_corpus_url": "https://monkey.org/~jose/phishing/",
+        "url": "https://zenodo.org/api/records/8339691/files/Nazario.csv/content",
+        "bytes": 7811841,
+        "published_md5": "4022d055bb7cf8602f30f768f652e91e",
+        "sha256": "b8fbc4158fbdfaff1ed98584c43d72e283c6352d7ade4d457d34c1d79488d184"
+      }
+    ]
+  },
+  "original_label_mapping_by_source": {
+    "enron": {
+      "0": 0,
+      "1": null
+    },
+    "nazario": {
+      "1": 1
+    }
+  },
+  "ingestion": {
+    "enron": {
+      "raw_rows": 29767,
+      "excluded_label": 13976,
+      "unusable": 0,
+      "selected_rows": 15791,
+      "original_labels": {
+        "0": 15791,
+        "1": 13976
+      }
+    },
+    "nazario": {
+      "raw_rows": 1565,
+      "excluded_label": 0,
+      "unusable": 3,
+      "selected_rows": 1562,
+      "original_labels": {
+        "1": 1565
+      }
+    }
+  },
+  "cleaning": {
+    "exact_duplicates_removed": 343,
+    "conflicting_rows_removed": 0,
+    "exact_conflict_groups": 0,
+    "near_conflict_groups": 0,
+    "near_groups_retained": 581,
+    "near_group_rows_retained": 1601,
+    "reply_subject_groups_linked": 789
+  },
+  "grouping": {
+    "exact": "Identical normalized subject and body text",
+    "near_jaccard_minimum": 0.82,
+    "near_shingle_words": 3,
+    "near_minimum_distinct_shingles": 8,
+    "near_low_hash_keys": 8,
+    "near_max_block_size": 64,
+    "near_max_sample_words": 1024,
+    "thread_proxy": "Same source and normalized subject of at least 3 tokens, with a reply/forward prefix on at least one row"
+  },
+  "split_method": "StratifiedGroupKFold with five shuffled folds, fold 0 test, fold 1 validation, folds 2-4 train",
+  "split_seed": 42,
+  "splits": {
+    "train": {
+      "rows": 10250,
+      "legitimate": 9298,
+      "phishing": 952,
+      "groups": 8834,
+      "source_by_class": {
+        "enron": {
+          "legitimate": 9298,
+          "phishing": 0
+        },
+        "nazario": {
+          "legitimate": 0,
+          "phishing": 952
+        }
+      },
+      "row_ids_sha256": "a73dea5aa7eefb7ea6b0d242c0529619870f7f9da3a7d5b76045ee6e332fa8eb"
+    },
+    "validation": {
+      "rows": 3421,
+      "legitimate": 3128,
+      "phishing": 293,
+      "groups": 2945,
+      "source_by_class": {
+        "enron": {
+          "legitimate": 3128,
+          "phishing": 0
+        },
+        "nazario": {
+          "legitimate": 0,
+          "phishing": 293
+        }
+      },
+      "row_ids_sha256": "773d57d149a510e54c84ff600b5d844b6a01df25a386349381dcdcec325ea35f"
+    },
+    "test": {
+      "rows": 3339,
+      "legitimate": 3041,
+      "phishing": 298,
+      "groups": 2944,
+      "source_by_class": {
+        "enron": {
+          "legitimate": 3041,
+          "phishing": 0
+        },
+        "nazario": {
+          "legitimate": 0,
+          "phishing": 298
+        }
+      },
+      "row_ids_sha256": "c8d5fff32badbd0c068e41edbd5c8ee86fba7fd2efb76ab8c1258aa3cc5867cc"
+    }
+  },
+  "source_class_confounding": "All retained Enron rows are legitimate and all retained Nazario rows are phishing. No source-held-out binary test is possible.",
+  "configuration": {
+    "tfidf": {
+      "ngram_range": [
+        1,
+        2
+      ],
+      "min_df": 2,
+      "max_features": 40000,
+      "sublinear_tf": true
+    },
+    "logistic_regression": {
+      "solver": "liblinear",
+      "C": 1.0,
+      "max_iter": 500
+    }
+  },
+  "threshold": 0.10805200643670997,
+  "threshold_policy": {
+    "max_validation_false_positive_rate": 0.01,
+    "objective": "Maximize validation phishing recall; ties prefer lower false-positive rate, then higher threshold",
+    "positive_when": "phishing_score >= threshold"
+  },
+  "score": "Class-1 predict_proba output. Calibration has not been evaluated.",
+  "metrics": {
+    "validation": {
+      "precision_phishing": 0.9116719242902208,
+      "recall_phishing": 0.9863481228668942,
+      "f1_phishing": 0.9475409836065574,
+      "false_positive_rate": 0.008951406649616368,
+      "average_precision": 0.9947981225723455,
+      "accuracy": 0.9906460099386144,
+      "confusion_matrix_class_order": [
+        "legitimate",
+        "phishing"
+      ],
+      "confusion_matrix_rows_actual_columns_predicted": [
+        [
+          3100,
+          28
+        ],
+        [
+          4,
+          289
+        ]
+      ]
+    },
+    "test": {
+      "precision_phishing": 0.8945783132530121,
+      "recall_phishing": 0.9966442953020134,
+      "f1_phishing": 0.9428571428571428,
+      "false_positive_rate": 0.011509371917132522,
+      "average_precision": 0.9951828560466053,
+      "accuracy": 0.9892183288409704,
+      "confusion_matrix_class_order": [
+        "legitimate",
+        "phishing"
+      ],
+      "confusion_matrix_rows_actual_columns_predicted": [
+        [
+          3006,
+          35
+        ],
+        [
+          1,
+          297
+        ]
+      ]
+    },
+    "test_dummy_prior": {
+      "precision_phishing": 0.0,
+      "recall_phishing": 0.0,
+      "f1_phishing": 0.0,
+      "false_positive_rate": 0.0,
+      "average_precision": 0.08924827792752321,
+      "accuracy": 0.9107517220724768,
+      "confusion_matrix_class_order": [
+        "legitimate",
+        "phishing"
+      ],
+      "confusion_matrix_rows_actual_columns_predicted": [
+        [
+          3041,
+          0
+        ],
+        [
+          298,
+          0
+        ]
+      ]
+    }
+  },
+  "timing_seconds": {
+    "pipeline_fit": 4.902643400011584,
+    "prepare_fit_and_evaluate": 23.66848720004782
+  },
+  "bundle_format": "sentinelmesh-local-training-v1",
+  "model_version": "mail-tfidf-v1",
+  "preprocessing_version": "subject-body-v1",
+  "class_mapping": {
+    "0": "legitimate",
+    "1": "phishing"
+  },
+  "versions": {
+    "python": "3.13.8",
+    "numpy": "2.2.6",
+    "scipy": "1.15.3",
+    "scikit-learn": "1.7.2",
+    "joblib": "1.5.2",
+    "threadpoolctl": "3.6.0"
+  },
+  "artifact": {
+    "file": "pipeline.joblib",
+    "sha256": "339e4d9363f1bfae5de710f399ebfa00717006be86879f9162f80b924952bd3a"
+  }
+}
