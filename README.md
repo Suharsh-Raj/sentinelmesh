@@ -59,3 +59,7 @@ On the 3,339-message held-out set, phishing precision was **89.46%**, recall **9
 ## Source and recovery
 
 GitHub holds the reproducible source, dependency manifests and lockfile, tests, dataset provenance, and aggregate evaluation reports. Local timestamped snapshots hold the complete recovery copy, including installed environments, raw datasets, fitted models, SQLite, and Git metadata where present. Credentials, databases, downloaded datasets, fitted models, dependencies, caches, build output, and backups stay out of tracked source.
+
+## GitHub Pages preview
+
+The [public preview](https://suharsh-raj.github.io/sentinelmesh/) shows synthetic mail, example link reports, and ledger entries. GitHub Actions builds it from the repository's seed fixtures in a fresh in-memory database. The preview is read-only. Run SentinelMesh locally to submit scans, revoke decisions, or reset demo data.
