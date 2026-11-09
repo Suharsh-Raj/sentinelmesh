@@ -3,6 +3,7 @@ import base64
 import hashlib
 import json
 import unittest
+from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Thread
@@ -138,6 +139,32 @@ class GmailTests(unittest.TestCase):
         self.assertEqual([path for path, query in self.mock.calls if query.get("format") == ["full"]],
                          ["messages/inbox", "messages/spam"])
         self.assertEqual(self.state().history_id, "10")
+
+    def test_initial_sync_checkpoints_after_empty_spam_listing(self):
+        self.mock.lists[("INBOX", "")] = {"messages": [{"id": "inbox"}]}
+        self.mock.messages["inbox"] = message("inbox", ["INBOX"])
+        self.authorization.get_client.return_value = GmailClient("synthetic-access-token")
+
+        def open_response(request, *, timeout):
+            token = request.get_header("Authorization").removeprefix("Bearer ")
+            payload = self.mock(request.full_url, token=token, limit=None)
+            path, query = self.mock.calls[-1]
+            if path == "messages" and query["labelIds"] == ["SPAM"]:
+                # Reproduce Gmail's empty 204 for the old field mask and
+                # its JSON response when the result estimate is requested.
+                if "resultSizeEstimate" not in query["fields"][0].split(","):
+                    return BytesIO()
+                payload = {"resultSizeEstimate": 0}
+            return BytesIO(json.dumps(payload).encode())
+
+        with patch.object(oauth, "build_opener") as opener:
+            opener.return_value.open.side_effect = open_response
+            self.sync.poll()
+
+        self.assertEqual(set(self.rows()), {"inbox"})
+        self.assertEqual(self.sync.describe()["state"], "connected")
+        self.assertEqual(self.state().history_id, "10")
+        self.assertIsNotNone(self.state().last_success)
 
     def test_history_retry_keeps_cursor_and_deduplicates_across_restart_and_reauth(self):
         self.sync.sync_once()

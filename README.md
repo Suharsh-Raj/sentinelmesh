@@ -96,7 +96,7 @@ The first successful account connection records the cutoff in UTC. Gmail's inter
 
 The parser prefers plain text, extracts readable text and inert HTTP(S) URLs from HTML, and does not load images, visit links, or fetch ordinary file attachments. It caps downloaded data and stored text; messages with omissions or truncation show a notice in message details.
 
-Phase 3 tests exercise Inbox and Spam, history recovery, account matching, and OAuth callback security with synthetic data and mocked Google requests. Live Google consent, Inbox/Spam arrival, and duplicate checking against the selected mailbox remain pending until the account owner completes setup. Model health is separate from Gmail connection health.
+Phase 3 tests exercise Inbox and Spam, history recovery, account matching, and OAuth callback security with synthetic data and mocked Google requests. The Gmail listing requests the result estimate so an empty Inbox or Spam page still returns a JSON response and sync can finish. Live verification covered account authorization, an imported Inbox message, and duplicate checking across repeated polls and a restart. Live Spam ingestion remains pending. Model health is separate from Gmail connection health.
 
 ## Source and recovery
 

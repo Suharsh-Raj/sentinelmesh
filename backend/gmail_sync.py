@@ -161,7 +161,9 @@ class GmailSync:
         for label in ("INBOX", "SPAM"):
             for page in self.pages(client, "messages", {
                 "labelIds": label, "includeSpamTrash": "true", "q": f"after:{cutoff_ms // 1000 - 1}",
-                "maxResults": 100, "fields": "nextPageToken,messages(id)",
+                # Gmail returns HTTP 204 when an empty list has no selected fields.
+                # Include the result estimate so an empty page still has a JSON body.
+                "maxResults": 100, "fields": "nextPageToken,messages(id),resultSizeEstimate",
             }):
                 for message in page.get("messages", []):
                     self.import_message(client, key, cutoff_ms, valid_id(message.get("id")))
