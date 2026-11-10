@@ -1,12 +1,14 @@
 """ChiefAgent event subscriber: decision ledger, revocation history, and incident correlation."""
 from datetime import datetime, timezone
 from urllib.parse import urlparse
+from ..agent_runtime import chief_work
 from ..database import SessionLocal
 from ..models import Email, LedgerEntry, Incident
 
 class ChiefAgent:
     name = "ChiefAgent"
 
+    @chief_work.track()
     def record_decision(self, db, event):
         stamp = event.get("timestamp")
         if isinstance(stamp, str):
@@ -26,14 +28,17 @@ class ChiefAgent:
 
     def handle(self,event):
         if event.get("agent") not in ("MailAgent","LinkAgent"): return
-        with SessionLocal() as db:
+        with chief_work.track(), SessionLocal() as db:
             self.record_decision(db, event)
             if event["agent"]=="LinkAgent" and event["decision"]=="MALICIOUS":
-                try: parsed=urlparse(event["target"] if "://" in event["target"] else "https://"+event["target"]); host=(parsed.hostname or "").lower()
+                try: parsed=urlparse(event["target"] if "://" in event["target"] else "https://"+event["target"]); host=(parsed.hostname or "").lower().rstrip(".")
                 except ValueError: host=""
-                for mail in db.query(Email).filter(Email.verdict.in_(["BLOCK","QUARANTINE"])).all():
-                    domain=mail.sender.rsplit("@",1)[-1].lower()
-                    if not domain or not (host==domain or host.endswith("."+domain) or domain in host): continue
+                contained = db.query(Email).filter(
+                    Email.verdict.in_(["BLOCK", "QUARANTINE"]), Email.revoked.is_(False),
+                )
+                for mail in contained:
+                    domain=mail.sender.rsplit("@",1)[-1].lower().rstrip(".")
+                    if not domain or not (host==domain or host.endswith("."+domain)): continue
                     import unicodedata
                     cyrillic=next((f"Cyrillic '{c}'" for c in mail.sender if "CYRILLIC" in unicodedata.name(c,"")),"")
                     brands=("Amazon","Microsoft","Google","PayPal","Apple","Netflix")

@@ -1,0 +1,58 @@
+.agent-button {
+  width: 100%;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+}
+.agent-button:hover { background: var(--panel2); }
+.agent-button:focus-visible, .dashboard-dialog button:focus-visible, .ledger-entry:focus {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+.dashboard-dialog {
+  position: fixed;
+  inset: 68px 24px auto auto;
+  width: min(440px, calc(100vw - 32px));
+  max-height: calc(100vh - 92px);
+  margin: 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 12px 32px #172b3b25;
+}
+.dashboard-dialog::backdrop { background: #17212b38; }
+.dashboard-dialog-header, .dashboard-panel-line, .dashboard-panel-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.dashboard-dialog-header h2 { margin: 0; font-size: 17px; }
+.dashboard-dialog-header button { flex: none; }
+.dashboard-panel-list { list-style: none; padding: 0; margin: 12px 0 0; }
+.dashboard-panel-list li { padding: 10px 0; border-top: 1px solid var(--border); }
+.dashboard-panel-list p, .agent-description p, .dashboard-panel-empty {
+  margin: 6px 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.dashboard-panel-line { align-items: baseline; font-size: 13px; }
+.dashboard-panel-line time { color: var(--muted); font-size: 11px; text-align: right; }
+.dashboard-panel-actions { justify-content: flex-start; flex-wrap: wrap; }
+.dashboard-panel-subtitle { font-size: 13px; margin: 14px 0 0; }
+.dashboard-refresh { display: flex; align-items: center; gap: 6px; }
+.dashboard-refresh-status { color: var(--muted); font-size: 11px; }
+.status-pill.preview { background: var(--panel2); border-color: var(--border); color: var(--muted); }
+.refresh-spinner { animation: dashboard-spin .8s linear infinite; }
+@keyframes dashboard-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .refresh-spinner { animation: none; }
+}
+@media (max-width: 850px) {
+  .sidebar-bottom .version { display: grid; gap: 2px; text-align: center; font-size: 7px; padding-inline: 0; }
+  .sidebar-bottom .version-right { float: none !important; }
+}

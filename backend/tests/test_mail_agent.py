@@ -62,6 +62,40 @@ class MailAgentInboxFlow(unittest.IsolatedAsyncioTestCase):
         self.api.SessionLocal, self.chief.SessionLocal = self.original_sessions
         self.engine.dispose()
 
+    async def test_runtime_reports_actual_mail_work_and_lifecycle(self):
+        import asyncio
+        from unittest.mock import patch
+
+        started, release = asyncio.Event(), asyncio.Event()
+
+        class WaitingModel:
+            async def analyze(self, subject, body):
+                started.set()
+                await release.wait()
+                return None
+
+        unavailable = {name: "unavailable" for name in ("MailAgent", "LinkAgent", "ChiefAgent")}
+        self.assertEqual(self.api.agent_runtime(), unavailable)
+        with patch.multiple(self.api, initialize_database=lambda: None, seed_simulated_data=lambda: None,
+                            load_mail_model=WaitingModel, MAIL_SOURCE="simulated"):
+            original_model = self.api.mail_model
+            try:
+                async with self.api.lifespan(self.api.app):
+                    expected = {"MailAgent": "active", "LinkAgent": "unavailable", "ChiefAgent": "active"}
+                    self.assertEqual(self.api.agent_runtime(), expected)
+                    await self.api.submit_email(self.api.EmailInput(sender="fixture@example.org", subject="Fixture"))
+                    await asyncio.wait_for(started.wait(), timeout=4)
+                    self.assertEqual(self.api.agent_runtime(), {**expected, "MailAgent": "processing"})
+                    release.set()
+                    for _ in range(50):
+                        if self.api.agent_runtime() == expected:
+                            break
+                        await asyncio.sleep(.01)
+                    self.assertEqual(self.api.agent_runtime(), expected)
+            finally:
+                self.api.mail_model = original_model
+        self.assertEqual(self.api.agent_runtime(), unavailable)
+
     async def test_queued_emails_are_processed_into_decisions_and_revoke(self):
         from backend.models import Email, LedgerEntry, Allowlist
         cases = [

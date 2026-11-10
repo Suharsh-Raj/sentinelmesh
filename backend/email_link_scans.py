@@ -8,6 +8,7 @@ from urllib.parse import unquote, urlsplit
 
 from sqlalchemy import or_, select, update
 
+from .agent_runtime import link_work
 from .agents.link_agent import analyze_url_static
 from .models import Email, EmailLinkScan, Event, now_utc
 
@@ -105,7 +106,8 @@ def scan_next(sessions, chief, inspect=analyze_url_static):
     if work is None:
         return None
     job, url = work
-    state, severity, score, evidence, elapsed = inspect_link(job.position, url, inspect)
+    with link_work.track():
+        state, severity, score, evidence, elapsed = inspect_link(job.position, url, inspect)
     event = {
         "timestamp": now_utc(), "agent": "LinkAgent", "event_type": "email_link_static",
         "target": f"Email #{job.email_id} / link {job.position + 1}",

@@ -86,6 +86,39 @@ class LinkAgentLedgerFlowTests(unittest.IsolatedAsyncioTestCase):
         self.api.SessionLocal, self.chief.SessionLocal = self.original_sessions
         self.engine.dispose()
 
+    async def test_correlation_requires_contained_sender_and_domain_boundary(self):
+        from backend.models import Email, Event, Incident, LedgerEntry
+
+        with self.sessions.begin() as db:
+            mail = Email(sender="fixture@blocked.example", subject="Fixture", verdict="BLOCK",
+                         risk_score=90, folder="Quarantine")
+            db.add(mail)
+            db.flush()
+            entry = LedgerEntry(agent="MailAgent", target=mail.sender, decision="BLOCK", email_id=mail.id)
+            db.add(entry)
+            db.flush()
+            entry_id = entry.id
+
+        def signal(host):
+            self.api.chief_agent.handle(dict(agent="LinkAgent", target="https://" + host,
+                decision="MALICIOUS", risk_score=90, reasoning="Fixture", evidence=["Fixture"]))
+
+        signal("blocked.example.unrelated.test")
+        with self.sessions() as db:
+            self.assertEqual(db.query(Incident).count(), 0)
+        signal("links.blocked.example")
+        with self.sessions() as db:
+            self.assertEqual(db.query(Incident).count(), 1)
+
+        await self.api.revoke(entry_id)
+        await self.api.revoke(entry_id)
+        signal("blocked.example")
+        with self.sessions() as db:
+            self.assertEqual(db.query(Incident).count(), 1)
+            self.assertEqual(db.query(Event).filter_by(event_type="decision_revoked").count(), 1)
+            self.assertEqual(db.get(LedgerEntry, entry_id).status, "REVOKED")
+            self.assertEqual(db.query(LedgerEntry).filter_by(agent="LinkAgent").count(), 3)
+
     async def test_url_and_eicar_file_decisions_write_list_evidence_to_chief_ledger_and_sse(self):
         from backend.models import Email, Event, LedgerEntry, LinkScan
         from starlette.datastructures import UploadFile

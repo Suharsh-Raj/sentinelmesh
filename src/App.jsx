@@ -1,11 +1,23 @@
-import React,{useEffect,useMemo,useState}from'react';
-import{Activity,Shield,ShieldAlert,Inbox as InboxIcon,Link2,BookOpen,Settings2,Search,Bell,ChevronDown,ArrowUpRight,ArrowDownRight,Mail,Clock3,PanelRightClose,Plus,RotateCcw,X,Check,AlertTriangle,ExternalLink,Filter,Send,LockKeyhole,ScanLine,Radio,Command,Eye,Download,Network,FileWarning,ShieldCheck,Menu}from'lucide-react';
+import React,{useEffect,useMemo,useRef,useState}from'react';
+import{Activity,Shield,ShieldAlert,Inbox as InboxIcon,Link2,BookOpen,Search,Bell,ChevronDown,ArrowUpRight,ArrowDownRight,Mail,Clock3,PanelRightClose,Plus,RotateCcw,X,Check,AlertTriangle,ExternalLink,Filter,Send,LockKeyhole,ScanLine,Radio,Command,Eye,Download,Network,FileWarning,ShieldCheck,Menu}from'lucide-react';
+import {agents, agentStatus, collectAlerts, DashboardDialog} from './DashboardControls.jsx';
+import './dashboard-controls.css';
 import{AreaChart,Area,XAxis,YAxis,Tooltip,ResponsiveContainer,BarChart,Bar,CartesianGrid}from'recharts';
 const API='/api';
 const PAGES_DEMO = import.meta.env.VITE_PAGES_DEMO === 'true';
+const SEEN_ALERTS_KEY = 'sentinelmesh.seen-alerts';
+
+function readSeenAlerts() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SEEN_ALERTS_KEY) || '[]');
+    return new Set(Array.isArray(saved) ? saved : []);
+  } catch {
+    return new Set();
+  }
+}
 
 async function readJson(url) {
-  const response = await fetch(url);
+  const response = await fetch(url, {cache: 'no-store', signal: AbortSignal.timeout(12000)});
   if (!response.ok) throw new Error(`Unable to load ${url}`);
   return response.json();
 }
@@ -81,7 +93,32 @@ function App(){
  const selectedEmail = selected && emails.find(email => email.id === selected.id);
  const [chartEnd, setChartEnd] = useState(() => Math.floor(Date.now() / CHART_HOUR_MS) * CHART_HOUR_MS);
 
- const refresh = async () => {
+ const [panel, setPanel] = useState(null);
+ const [seenAlerts, setSeenAlerts] = useState(readSeenAlerts);
+ const [refreshFeedback, setRefreshFeedback] = useState(null);
+ const [ledgerJump, setLedgerJump] = useState(null);
+ const refreshInFlight = useRef(null);
+ const alerts = useMemo(() => collectAlerts(events, ledger, incidents), [events, ledger, incidents]);
+ const alertScope = PAGES_DEMO ? 'preview' : stats.mail_source ?? 'local';
+ const hasUnread = alerts.some(alert => !seenAlerts.has(alertScope + ':' + alert.id));
+ const agentHealth = PAGES_DEMO ? 'PREVIEW' : health;
+ const online = health === 'OPERATIONAL';
+
+ useEffect(() => {
+   if (panel !== 'notifications') return;
+   setSeenAlerts(previous => {
+     const keys = alerts.map(alert => alertScope + ':' + alert.id);
+     if (keys.every(key => previous.has(key))) return previous;
+     return new Set([...previous, ...keys].slice(-1500));
+   });
+ }, [panel, alerts, alertScope]);
+
+ useEffect(() => {
+   try { localStorage.setItem(SEEN_ALERTS_KEY, JSON.stringify([...seenAlerts])); }
+   catch { /* Reading still works for the current tab. */ }
+ }, [seenAlerts]);
+
+ const loadDashboard = async () => {
    try {
      let data;
      if (PAGES_DEMO) {
@@ -96,6 +133,7 @@ function App(){
      const end = PAGES_DEMO
        ? Math.ceil(Date.parse(data.generated_at) / CHART_HOUR_MS) * CHART_HOUR_MS
        : Math.floor(Date.now() / CHART_HOUR_MS) * CHART_HOUR_MS;
+     const threatSeries = buildThreatSeries(data.events, end);
      setStats(data.stats);
      setEmails(data.emails);
      setLedger(data.ledger);
@@ -103,11 +141,26 @@ function App(){
      setLinks(data.links);
      setIncidents(data.incidents);
      setChartEnd(end);
-     setChart(buildThreatSeries(data.events, end));
+     setChart(threatSeries);
      setHealth(PAGES_DEMO ? 'PREVIEW' : 'OPERATIONAL');
+     return true;
    } catch {
      setHealth('OFFLINE');
+     return false;
    }
+ };
+
+ const refresh = () => {
+   if (!refreshInFlight.current) {
+     refreshInFlight.current = loadDashboard().finally(() => { refreshInFlight.current = null; });
+   }
+   return refreshInFlight.current;
+ };
+
+ const refreshDashboard = async () => {
+   setRefreshFeedback({pending: true});
+   const success = await refresh();
+   setRefreshFeedback(success ? {time: new Date()} : {failed: true});
  };
  useEffect(()=>{refresh();if(PAGES_DEMO)return;const t=setInterval(refresh,6000);let source;try{source=new EventSource(`${API}/stream`);source.onmessage=()=>refresh();source.onerror=()=>{};}catch{}return()=>{clearInterval(t);source?.close()}},[]);
  useEffect(()=>{if(page==='Inbox'||page==='Quarantine')setFilter(page);if(page==='Link Lab')setDrawer(false)},[page]);
@@ -123,19 +176,47 @@ function App(){
  const rangeEnd=chartEnd,rangeStart=rangeEnd-CHART_RANGE_MS;const chartTicks=Array.from({length:7},(_,i)=>rangeStart+(rangeEnd-rangeStart)*i/6);
  const tone=v=>v==='ALLOW'||v==='SAFE'?'green':v==='QUARANTINE'||v==='SUSPICIOUS'?'amber':v==='BLOCK'||v==='MALICIOUS'?'red':'neutral';
  const onClickScenario=async item=>sendEmail(item[1]);
- return <div className="app-shell"><aside className="sidebar"><div className="brand"><div className="brandmark"><Shield size={19}/><span/></div><div><div className="brand-name">sentinel<span>mesh</span></div><div className="brand-caption">THREAT DEFENSE PLATFORM</div></div></div><div className="workspace"><span className="workspace-dot"/> EVALUATION ENVIRONMENT <ChevronDown size={13}/></div><div className="side-label">WORKSPACE</div><nav>{nav.map(({name,icon:Icon,count})=><button key={name} onClick={()=>setPage(name)} className={`nav-item ${page===name?'selected':''}`}><Icon size={17}/><span>{name}</span>{count>0&&<span className="nav-count">{count}</span>}</button>)}</nav><div className="side-label agents-label">{PAGES_DEMO?'DEMO AGENTS':'ACTIVE AGENTS'} {!PAGES_DEMO&&<span className="live-dot"/>}</div><div className="agent-item"><div className="agent-icon cyan"><Mail size={14}/></div><div><b>MailAgent</b><small>Content analysis</small></div><i/></div><div className="agent-item"><div className="agent-icon violet"><Link2 size={14}/></div><div><b>LinkAgent</b><small>URL checks and simulation</small></div><i/></div><div className="agent-item"><div className="agent-icon gold"><Command size={14}/></div><div><b>ChiefAgent</b><small>Decision orchestration</small></div><i/></div><div className="sidebar-bottom"><div className="side-user"><div className="avatar">OP</div><div><b>Security Operator</b><small>{PAGES_DEMO?'Public preview':gmailMode?'Local Gmail session':'Local demo session'}</small></div><Settings2 size={16}/></div><div className="version">SENTINELMESH <span>v1.0.0</span><span className="version-right">{PAGES_DEMO?"PREVIEW":"LOCAL MODE"}</span></div></div></aside>
- <main className="main"><header className="topbar"><div className="crumb"><span>Workspace</span><b>/</b><strong>{page}</strong></div><div className="top-actions">{!PAGES_DEMO&&<ModelStatus model={stats.ml_model} online={health==="OPERATIONAL"}/>}<div className={`status-pill ${['OPERATIONAL','PREVIEW'].includes(health)?'':'warn'}`}><span/> {health==='PREVIEW'?'Demo preview':health==='OPERATIONAL'?'Local services online':health}</div><button className="icon-button" aria-label="Notifications"><Bell size={17}/><i/></button><div className="top-divider"/><div className="top-user"><div className="avatar">OP</div><ChevronDown size={14}/></div></div></header>
- <div className="content"><div className="page-heading"><div><div className="eyebrow"><span/> SECURITY OPERATIONS CENTER <span className="eyebrow-divider">/</span> {PAGES_DEMO?'SAMPLE TELEMETRY':'LIVE TELEMETRY'}</div><h1>{page==='Dashboard'?'Good morning, Operator.':page}</h1><p>{page==='Dashboard'?'Here’s what’s happening across your defense mesh.':'Review signals, evidence, and decisions from your defense mesh.'}</p></div><div className="heading-actions"><div className="sync-label"><Radio size={14}/> {PAGES_DEMO?'READ-ONLY':'REAL-TIME'} {!PAGES_DEMO&&<span className="sync-live"/>}</div><button className="button secondary" onClick={refresh}><RotateCcw size={14}/> Refresh</button>{demoControls&&<button className="button primary" onClick={()=>setDrawer(true)}><Plus size={15}/> Demo controls</button>}</div></div>
+ return <div className="app-shell"><aside className="sidebar"><div className="brand"><div className="brandmark"><Shield size={19}/><span/></div><div><div className="brand-name">sentinel<span>mesh</span></div><div className="brand-caption">THREAT DEFENSE PLATFORM</div></div></div><div className="workspace">{online&&<span className="workspace-dot"/>} EVALUATION ENVIRONMENT <ChevronDown size={13}/></div><div className="side-label">WORKSPACE</div><nav>{nav.map(({name,icon:Icon,count})=><button key={name} onClick={()=>setPage(name)} className={`nav-item ${page===name?'selected':''}`}><Icon size={17}/><span>{name}</span>{count>0&&<span className="nav-count">{count}</span>}</button>)}</nav><div className="side-label agents-label">AGENTS</div>
+ {agents.map(({name, icon: Icon, color, summary}) => {
+   const status = agentStatus(agentHealth, stats.agent_runtime?.[name]);
+   return <button key={name} type="button" className="agent-item agent-button"
+     aria-label={name + ' details'} aria-haspopup="dialog" aria-expanded={panel === name}
+     title={status} onClick={() => setPanel(name)}>
+     <div className={'agent-icon ' + color}><Icon size={14}/></div>
+     <div><b>{name}</b><small>{summary}</small></div>
+     {(status === 'Active' || status === 'Processing') && <i aria-label={status}/>}
+   </button>;
+ })}
+ <div className="sidebar-bottom"><div className="version">SENTINELMESH <span>v1.0.0</span><span className="version-right">{PAGES_DEMO?"PREVIEW":"LOCAL MODE"}</span></div></div></aside>
+ <main className="main"><header className="topbar"><div className="crumb"><span>Workspace</span><b>/</b><strong>{page}</strong></div><div className="top-actions">{!PAGES_DEMO&&<ModelStatus model={stats.ml_model} online={health==="OPERATIONAL"}/>}<div className={'status-pill ' + (online ? '' : health === 'PREVIEW' ? 'preview' : 'warn')}>{online&&<span/>} {health==='PREVIEW'?'Demo preview':online?'Local services online':health}</div>
+ <button type="button" className="icon-button" aria-label={hasUnread ? 'Notifications (unread)' : 'Notifications'}
+   aria-haspopup="dialog" aria-expanded={panel === 'notifications'} onClick={() => setPanel('notifications')}>
+   <Bell size={17}/>{hasUnread&&<i aria-hidden="true"/>}
+ </button></div></header>
+ <div className="content"><div className="page-heading"><div><div className="eyebrow">{online&&<span/>} SECURITY OPERATIONS CENTER <span className="eyebrow-divider">/</span> {PAGES_DEMO?'SAMPLE TELEMETRY':'LIVE TELEMETRY'}</div><h1>{page==='Dashboard'?'SentinelMesh dashboard':page}</h1><p>{page==='Dashboard'?'Here’s what’s happening across your defense mesh.':'Review signals, evidence, and decisions from your defense mesh.'}</p></div><div className="heading-actions"><div className="sync-label"><Radio size={14}/> {PAGES_DEMO?'READ-ONLY':online?'REAL-TIME':'LOCAL'} {online&&<span className="sync-live"/>}</div><div className="dashboard-refresh">
+   <button type="button" className="button secondary" onClick={refreshDashboard} disabled={refreshFeedback?.pending}
+     aria-busy={Boolean(refreshFeedback?.pending)}>
+     <RotateCcw size={14} className={refreshFeedback?.pending ? 'refresh-spinner' : undefined} aria-hidden="true"/>
+     {refreshFeedback?.pending ? 'Refreshing\u2026' : 'Refresh'}
+   </button>
+   <span className="dashboard-refresh-status" role="status">
+     {refreshFeedback?.failed ? 'Refresh failed' : refreshFeedback?.time ?
+       'Refreshed at ' + refreshFeedback.time.toLocaleTimeString() : ''}
+   </span>
+ </div>{demoControls&&<button className="button primary" onClick={()=>setDrawer(true)}><Plus size={15}/> Demo controls</button>}</div></div>
  {PAGES_DEMO&&<p className="pages-preview-notice">GitHub Pages preview. Explore synthetic messages, decisions, and link reports. Run SentinelMesh locally to submit scans or change demo data.</p>}
  <MailSourceStatus source={PAGES_DEMO?'simulated':stats.mail_source} sync={stats.gmail_sync}/>
- {page==='Dashboard'&&<><div className="stats-grid">{[{label:'Emails scanned',value:stats.emails_scanned,change:'All time',icon:Mail,color:'cyan'},{label:gmailMode?'Local threat verdicts':'Threats contained',value:stats.blocked,change:`${stats.emails_scanned?Math.round(stats.blocked/stats.emails_scanned*100):0}% of mail`,icon:ShieldAlert,color:'red'},{label:'Link Lab reports',value:stats.links_analyzed,change:'Manual simulation',icon:Link2,color:'violet'},{label:'Critical incidents',value:stats.incidents,change:'Correlated signals',icon:Activity,color:'amber'},{label:'Decisions revoked',value:stats.revoked,change:'Operator overrides',icon:RotateCcw,color:'green'}].map((x,i)=><div className="stat-card" key={x.label}><div className="stat-top"><span>{x.label}</span><div className={`stat-icon ${x.color}`}><x.icon size={16}/></div></div><div className="stat-value">{x.value.toLocaleString()}<span className="stat-index">0{i+1}</span></div><div className="stat-foot"><span className="neutral-change">{x.change}</span><span className="stat-period">{PAGES_DEMO?"SAMPLE":"↗ LIVE"}</span></div></div>)}</div><div className="overview-grid"><section className="panel chart-panel"><div className="panel-header"><div><h2>Threat activity</h2><p>Detection volume across the defense mesh</p></div><button className="range-button">Last 24 hours <ChevronDown size={13}/></button></div><div className="chart-legend"><span/><b>Threat detections</b><small>{PAGES_DEMO?"seeded demo":"updated live"}</small></div><div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><AreaChart data={chart} margin={{top:12,right:6,left:-18,bottom:0}}><defs><linearGradient id="area" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#26d9cd" stopOpacity={.22}/><stop offset="100%" stopColor="#26d9cd" stopOpacity={0}/></linearGradient></defs><CartesianGrid stroke="#e3e8ee" vertical={false}/><XAxis dataKey="time" type="number" scale="time" domain={[rangeStart,rangeEnd]} ticks={chartTicks} interval={0} tickFormatter={value=>new Date(value).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})} axisLine={false} tickLine={false} tick={{fill:'#526173',fontSize:11}} dy={9}/><YAxis allowDecimals={false} axisLine={false} tickLine={false} tick={{fill:'#526173',fontSize:11}}/><Tooltip contentStyle={{background:'#ffffff',border:'1px solid #d5dde5',borderRadius:8,color:'#25313d'}}/><Area type="monotone" dataKey="detections" name="Threat detections" stroke="#31d8cf" strokeWidth={2} fill="url(#area)" dot={{r:3,fill:"#31d8cf",strokeWidth:0}} activeDot={{r:5}}/></AreaChart></ResponsiveContainer></div><div className="chart-summary"><div><span className="summary-dot teal"/> <span>{gmailMode?'Local threat verdicts':'Contained'}</span><b>{stats.blocked}</b></div><div><span className="summary-dot gold"/> <span>{gmailMode?'Local allows':'Allowed'}</span><b>{stats.verdicts?.ALLOW||0}</b></div><div><span className="summary-dot slate"/> <span>Avg. risk</span><b>{emails.length?Math.round(emails.reduce((s,e)=>s+e.risk_score,0)/emails.length):0}<small>/100</small></b></div></div></section><section className="panel activity-panel"><div className="panel-header"><div><h2>{PAGES_DEMO?"Sample activity":"Live activity"}</h2><p>{PAGES_DEMO?"Recorded demo decisions":"Agent actions as they happen"}</p></div><span className="feed-live">{!PAGES_DEMO&&<span/>}{PAGES_DEMO?"DEMO":"LIVE"}</span></div><div className="activity-list">{events.slice(0,6).map((e,i)=><div className="activity-row" key={e.id||i}><div className={`feed-marker ${tone(e.decision)}`}><ShieldCheck size={14}/></div><div className="activity-copy"><b>{e.agent}</b><span>{e.event_type==='historical_scan'?'Scanned':e.event_type.replaceAll('_',' ')} <strong>{e.target}</strong></span><small>{e.reasoning?.split('. ')[0]}</small></div><div className="activity-meta"><Badge tone={tone(e.decision)}>{e.decision}</Badge><time>{timeAgo(e.timestamp)}</time></div></div>)}</div><button className="panel-link" onClick={()=>setPage('Decision Ledger')}>View decision ledger <ArrowUpRight size={14}/></button></section></div><section className="panel table-panel"><div className="panel-header"><div><h2>Recent email activity</h2><p>Latest messages analyzed by MailAgent</p></div><button className="panel-link" onClick={()=>{setFilter('Inbox');setPage('Inbox')}}>View all mail <ArrowUpRight size={14}/></button></div><EmailTable rows={emails.slice(0,5)} onSelect={setSelected} tone={tone}/></section><div className="bottom-strip"><div><div className="strip-icon"><LockKeyhole size={16}/></div><div><b>{PAGES_DEMO?"Sample defense mesh":"Your defense mesh is active"}</b><span>{PAGES_DEMO?"Example decisions from three agents.":"All three agents are monitoring this local environment."}</span></div></div><span className="runtime-tag">{!PAGES_DEMO&&<span/>}{PAGES_DEMO?"SEEDED SNAPSHOT":"EVENT BUS CONNECTED"}</span></div></>}
+ {page==='Dashboard'&&<><div className="stats-grid">{[{label:'Emails scanned',value:stats.emails_scanned,change:'All time',icon:Mail,color:'cyan'},{label:gmailMode?'Local threat verdicts':'Threats contained',value:stats.blocked,change:`${stats.emails_scanned?Math.round(stats.blocked/stats.emails_scanned*100):0}% of mail`,icon:ShieldAlert,color:'red'},{label:'Link Lab reports',value:stats.links_analyzed,change:'Manual simulation',icon:Link2,color:'violet'},{label:'Critical incidents',value:stats.incidents,change:'Correlated signals',icon:Activity,color:'amber'},{label:'Decisions revoked',value:stats.revoked,change:'Operator overrides',icon:RotateCcw,color:'green'}].map((x,i)=><div className="stat-card" key={x.label}><div className="stat-top"><span>{x.label}</span><div className={`stat-icon ${x.color}`}><x.icon size={16}/></div></div><div className="stat-value">{x.value.toLocaleString()}<span className="stat-index">0{i+1}</span></div><div className="stat-foot"><span className="neutral-change">{x.change}</span><span className="stat-period">{PAGES_DEMO?"SAMPLE":"↗ LIVE"}</span></div></div>)}</div><div className="overview-grid"><section className="panel chart-panel"><div className="panel-header"><div><h2>Threat activity</h2><p>Detection volume across the defense mesh</p></div><button className="range-button">Last 24 hours <ChevronDown size={13}/></button></div><div className="chart-legend"><span/><b>Threat detections</b><small>{PAGES_DEMO?"seeded demo":online?"updated live":"last loaded data"}</small></div><div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><AreaChart data={chart} margin={{top:12,right:6,left:-18,bottom:0}}><defs><linearGradient id="area" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#26d9cd" stopOpacity={.22}/><stop offset="100%" stopColor="#26d9cd" stopOpacity={0}/></linearGradient></defs><CartesianGrid stroke="#e3e8ee" vertical={false}/><XAxis dataKey="time" type="number" scale="time" domain={[rangeStart,rangeEnd]} ticks={chartTicks} interval={0} tickFormatter={value=>new Date(value).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})} axisLine={false} tickLine={false} tick={{fill:'#526173',fontSize:11}} dy={9}/><YAxis allowDecimals={false} axisLine={false} tickLine={false} tick={{fill:'#526173',fontSize:11}}/><Tooltip contentStyle={{background:'#ffffff',border:'1px solid #d5dde5',borderRadius:8,color:'#25313d'}}/><Area type="monotone" dataKey="detections" name="Threat detections" stroke="#31d8cf" strokeWidth={2} fill="url(#area)" dot={{r:3,fill:"#31d8cf",strokeWidth:0}} activeDot={{r:5}}/></AreaChart></ResponsiveContainer></div><div className="chart-summary"><div><span className="summary-dot teal"/> <span>{gmailMode?'Local threat verdicts':'Contained'}</span><b>{stats.blocked}</b></div><div><span className="summary-dot gold"/> <span>{gmailMode?'Local allows':'Allowed'}</span><b>{stats.verdicts?.ALLOW||0}</b></div><div><span className="summary-dot slate"/> <span>Avg. risk</span><b>{emails.length?Math.round(emails.reduce((s,e)=>s+e.risk_score,0)/emails.length):0}<small>/100</small></b></div></div></section><section className="panel activity-panel"><div className="panel-header"><div><h2>{PAGES_DEMO?"Sample activity":online?"Live activity":"Recent activity"}</h2><p>{PAGES_DEMO?"Recorded demo decisions":"Agent actions as they happen"}</p></div><span className="feed-live">{online&&<span/>}{PAGES_DEMO?"DEMO":online?"LIVE":"OFFLINE"}</span></div><div className="activity-list">{events.slice(0,6).map((e,i)=><div className="activity-row" key={e.id||i}><div className={`feed-marker ${tone(e.decision)}`}><ShieldCheck size={14}/></div><div className="activity-copy"><b>{e.agent}</b><span>{e.event_type==='historical_scan'?'Scanned':e.event_type.replaceAll('_',' ')} <strong>{e.target}</strong></span><small>{e.reasoning?.split('. ')[0]}</small></div><div className="activity-meta"><Badge tone={tone(e.decision)}>{e.decision}</Badge><time>{timeAgo(e.timestamp)}</time></div></div>)}</div><button className="panel-link" onClick={()=>setPage('Decision Ledger')}>View decision ledger <ArrowUpRight size={14}/></button></section></div><section className="panel table-panel"><div className="panel-header"><div><h2>Recent email activity</h2><p>Latest messages analyzed by MailAgent</p></div><button className="panel-link" onClick={()=>{setFilter('Inbox');setPage('Inbox')}}>View all mail <ArrowUpRight size={14}/></button></div><EmailTable rows={emails.slice(0,5)} onSelect={setSelected} tone={tone}/></section><div className="bottom-strip"><div><div className="strip-icon"><LockKeyhole size={16}/></div><div><b>{PAGES_DEMO?"Sample defense mesh":online?"Local dashboard connected":"Local dashboard offline"}</b><span>{PAGES_DEMO?"Example decisions from three agents.":"Select an agent to check its current status."}</span></div></div><span className="runtime-tag">{online&&<span/>}{PAGES_DEMO?"SEEDED SNAPSHOT":online?"LOCAL DATA":"OFFLINE"}</span></div></>}
  {page==='Inbox'&&<MailPage rows={activeEmails.filter(e=>e.folder==='Inbox')} onSelect={setSelected} tone={tone} filter={filter} setFilter={setFilter} query={query} setQuery={setQuery} setDrawer={setDrawer} demoControls={demoControls}/>}
  {page==='Quarantine'&&<MailPage rows={activeEmails.filter(e=>e.folder==='Quarantine')} onSelect={setSelected} tone={tone} filter={filter} setFilter={setFilter} query={query} setQuery={setQuery} setDrawer={setDrawer} demoControls={demoControls}/>}
- {page==='Decision Ledger'&&<LedgerPage rows={ledger} revoke={revoke} tone={tone} gmailMode={gmailMode}/>}
+ {page==='Decision Ledger'&&<LedgerPage rows={ledger} revoke={revoke} tone={tone} gmailMode={gmailMode} jump={ledgerJump} finishJump={setLedgerJump}/>}
  {page==='Link Lab'&&<LinkLab analyze={analyzeLink} links={links} incidents={incidents} busy={busy} tone={tone} externalReport={linkReport}/>}
  <footer className="footer"><span>SentinelMesh <b>·</b> Multi-agent email & link defense</span><span>{PAGES_DEMO?"GitHub Pages preview":"Local evaluation environment"} <b>·</b> {new Date().toLocaleDateString()}</span></footer></div></main>
  {drawer&&demoControls&&<div className="drawer-backdrop" onClick={()=>setDrawer(false)}><aside className="demo-drawer" onClick={e=>e.stopPropagation()}><div className="drawer-head"><div><div className="eyebrow">EVALUATION TOOLS</div><h2>Demo control panel</h2><p>Trigger scenarios to explore the defense mesh.</p></div><button className="icon-button" onClick={()=>setDrawer(false)}><X size={17}/></button></div><div className="drawer-section-title">EMAIL SCENARIOS <span>01 — 05</span></div><div className="scenario-list">{scenarios.map(([title,payload],i)=><button className="scenario-button" key={title} disabled={busy} onClick={()=>onClickScenario([title,payload])}><span className={`scenario-number n${i}`}>0{i+1}</span><span>{title}</span><ArrowUpRight size={14}/></button>)}</div><div className="drawer-section-title link-scenarios-title">LINK SCENARIOS <span>06 — 09</span></div><div className="scenario-list">{[['Analyze credential-harvesting link','https://amazon.com.evil-login.xyz/verify','credential_harvester'],['Analyze malicious download link','http://203.0.113.42:8080/update.exe','drive_by_download'],['Analyze benign link','https://www.google.com/search?q=campus+calendar','benign']].map(([title,url,scenario],i)=><button className="scenario-button" key={title} disabled={busy} onClick={()=>{setPage('Link Lab');analyzeLink(url,scenario)}}><span className={`scenario-number n${i===2?3:i}`}>0{i+6}</span><span>{title}</span><ArrowUpRight size={14}/></button>)}<button className="scenario-button" disabled={busy} onClick={()=>{const signature='X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*';const sample=new File([signature],'eicar-test.txt',{type:'text/plain'});setPage('Link Lab');analyzeLink('', 'drive_by_download',sample)}}><span className="scenario-number n2">09</span><span>Analyze EICAR test file</span><ArrowUpRight size={14}/></button></div><div className="drawer-separator"/><div className="drawer-section-title">COMPOSE A TEST EMAIL <span>MANUAL INPUT</span></div><ManualForm submit={sendEmail} busy={busy}/><div className="drawer-bottom"><button className="reset-button" onClick={reset}><RotateCcw size={14}/> Reset demo data</button><span>Actions are recorded to the ledger.</span></div></aside></div>}
  {selectedEmail&&<EmailDetail email={selectedEmail} onClose={()=>setSelected(null)} tone={tone}/>}
+ <DashboardDialog panel={panel} onClose={() => setPanel(null)} alerts={alerts} emails={emails}
+   openMessage={id => setSelected({id})} openLedger={id => {setPage('Decision Ledger'); setLedgerJump(id ?? null);}}
+   health={agentHealth} runtime={stats.agent_runtime} events={events} ledger={ledger} incidents={incidents}/>
  {toast&&<div className="toast"><div className="toast-check"><Check size={15}/></div>{toast}<button onClick={()=>setToast('')}><X size={14}/></button></div>}
  </div>
 }
@@ -179,13 +260,22 @@ function LedgerEvidence({item}) {
   return <><p>{item.reasoning}</p>{item.evidence?.length>0&&<details><summary>Evidence <span>{item.evidence.length}</span><ChevronDown size={13}/></summary><ul>{item.evidence.map((x,i)=><li key={i}>{x}</li>)}</ul></details>}</>;
 }
 
-function LedgerPage({rows,revoke,tone,gmailMode}){
+function LedgerPage({rows,revoke,tone,gmailMode,jump,finishJump}){
  const[filter,setFilter]=useState('ALL');
+ useEffect(() => {
+   if (jump == null) return;
+   if (filter !== 'ALL') {
+     setFilter('ALL');
+     return;
+   }
+   document.getElementById('ledger-entry-' + jump)?.focus();
+   finishJump(null);
+ }, [jump, filter, finishJump]);
  const visible=rows.filter(x=>filter==='ALL'||x.status===filter);
  return <section className="panel ledger-page panel-full">
   <div className="ledger-toolbar"><div className="filter-pills">{['ALL','ACTIVE','REVOKED'].map(v=><button className={filter===v?'active':''} onClick={()=>setFilter(v)} key={v}>{v}<span>{v==='ALL'?rows.length:rows.filter(x=>x.status===v).length}</span></button>)}</div><span className="ledger-secure"><LockKeyhole size={13}/> {PAGES_DEMO?'SAMPLE DECISIONS':'IMMUTABLE EVENT RECORD'}</span></div>
   <div className="ledger-intro"><div className="eyebrow">CHIEF AGENT <span className="eyebrow-divider">/</span> DECISION LEDGER</div><h2>Decisions with a complete trail.</h2><p>Each agent decision is timestamped with its evidence and plain-English reasoning.</p></div>
-  <div className="ledger-list">{visible.map(item=><article className="ledger-entry" key={item.id}>
+  <div className="ledger-list">{visible.map(item=><article className="ledger-entry" id={'ledger-entry-' + item.id} tabIndex={-1} key={item.id}>
    <div className={`ledger-icon ${tone(item.decision)}`}>{item.agent==='MailAgent'?<Mail size={16}/>:<Link2 size={16}/>}</div>
    <div className="ledger-main"><div className="ledger-line"><b>{item.target}</b>{!item.link_scan && <Badge tone={tone(item.decision)}>{item.decision}</Badge>}<Badge tone={item.status==='REVOKED'?'green':'neutral'}>{item.status}</Badge></div>{item.agent === 'MailAgent' ? <>
       <section className="ledger-rules">
