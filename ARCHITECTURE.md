@@ -10,6 +10,10 @@ flowchart LR
   MA -->|decision + evidence| BUS[In-process async event bus]
   LA -->|decision + evidence| BUS
   BUS --> CA[ChiefAgent\nledger + correlation + revoke]
+  GS[Gmail read-only sync] -->|email and jobs in one transaction| DB
+  DB -->|lease one job| LS[Automatic LinkAgent static analysis]
+  LS -->|job + ledger + event| DB
+  LS -->|after commit| BUS
   BUS --> SSE[SSE stream]
   SSE --> UI
   API --> DB[(SQLite / SQLAlchemy\nEvents + email + link records)]
@@ -21,7 +25,8 @@ MailAgent and LinkAgent return scored findings with plain-language evidence. The
 ### Stored records
 
 - `emails`: sender fields, message text, verdict, score, evidence, folder, and revoke state.
-- `link_scans`: URL/file target, findings, verdict, score, and behavioral-profile report.
+- `link_scans`: manual Link Lab URL/file results and simulated profiles.
+- `email_link_scans`: automatic Gmail link jobs keyed by email and MIME link position, with lease, terminal state, static findings, and ledger ID.
 - `events`: timestamped agent actions, persisted before being emitted to SSE subscribers.
 - `ledger`: ChiefAgent-facing decision history, evidence, status, and revoke attribution.
 - `incidents`: severity, combined narrative, timestamp, and linked evidence.
@@ -31,4 +36,4 @@ MailAgent and LinkAgent return scored findings with plain-language evidence. The
 
 The sandbox is simulated. It selects one of four prebuilt profiles and renders a synthetic CPU/memory timeline, process tree, network log, file and persistence changes, backdoor indicator, and honeypot interactions. It does not run code, contact hosts, or alter the machine. Static checks and lightweight keyword scores are educational heuristics and can produce false positives or miss new attack patterns. The demo uses a local SQLite database and an in-process event bus, so it is intended for a single-user local evaluation.
 
-A production version would integrate Gmail API or Microsoft Graph API for mail access, and Cuckoo/CAPE or Firecracker for isolated real detonation. It would also need hardened identity and authorization, durable distributed messaging, audit retention, safe file handling, threat-intelligence updates, and security review.
+Gmail imports use the read-only Gmail API and can queue static URL checks. [Phase 5A](PHASE5A.md) documents the isolation gate for real browser inspection. It would also need hardened identity and authorization, durable distributed messaging, audit retention, safe file handling, threat-intelligence updates, and security review.

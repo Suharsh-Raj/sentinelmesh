@@ -15,12 +15,14 @@ class ChiefAgent:
             except ValueError:
                 stamp = None
         data = event.get("data") or {}
-        db.add(LedgerEntry(
+        entry = LedgerEntry(
             timestamp=stamp if isinstance(stamp, datetime) else datetime.now(timezone.utc),
             agent=event["agent"], target=event["target"], decision=event["decision"],
             risk_score=event["risk_score"], reasoning=event["reasoning"], evidence=event["evidence"],
             email_id=data.get("email_id"), ml_analysis=data.get("ml_analysis"),
-        ))
+        )
+        db.add(entry)
+        return entry
 
     def handle(self,event):
         if event.get("agent") not in ("MailAgent","LinkAgent"): return

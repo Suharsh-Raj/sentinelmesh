@@ -86,7 +86,7 @@ def _profile_report(host, scenario):
     }
 
 
-def analyze_url(url, scenario="credential_harvester"):
+def _url_signals(url):
     reasons = []
     score = 0
     candidate = str(url).strip()
@@ -177,6 +177,22 @@ def analyze_url(url, scenario="credential_harvester"):
                 score += 35
                 break
 
+    return score, reasons, host
+
+
+def analyze_url_static(url):
+    score, reasons, _ = _url_signals(url)
+    score = min(score, 100)
+    severity = "high" if score >= 65 else "medium" if score >= 25 else "low" if reasons else "none"
+    return {
+        "severity": severity, "risk_score": score,
+        "reasons": reasons or ["No suspicious static URL indicators were found."],
+    }
+
+
+def analyze_url(url, scenario="credential_harvester"):
+    """Manual Link Lab report with the existing simulated score adjustment."""
+    score, reasons, host = _url_signals(url)
     if scenario not in PROFILES:
         scenario = "credential_harvester"
     profile_reasons = {

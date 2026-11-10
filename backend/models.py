@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import String, Text, Integer, Boolean, DateTime, Index, JSON
+from sqlalchemy import String, Text, Integer, Boolean, DateTime, Index, JSON, Float, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from .database import Base
 
@@ -83,6 +83,26 @@ class LinkScan(Base):
     reasons: Mapped[list] = mapped_column(JSON, default=list)
     report: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+class EmailLinkScan(Base):
+    """Durable automatic scan job, separate from manual Link Lab simulations."""
+    __tablename__ = "email_link_scans"
+    __table_args__ = (
+        UniqueConstraint("email_id", "position"),
+        Index("ix_email_link_scan_ready", "state", "lease_until", "id"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email_id: Mapped[int] = mapped_column(ForeignKey("emails.id", ondelete="CASCADE"))
+    position: Mapped[int] = mapped_column(Integer)
+    state: Mapped[str] = mapped_column(String(20), default="queued")
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    attempt: Mapped[int] = mapped_column(Integer, default=0)
+    severity: Mapped[str | None] = mapped_column(String(10))
+    score: Mapped[int | None] = mapped_column(Integer)
+    evidence: Mapped[list] = mapped_column(JSON, default=list)
+    duration_ms: Mapped[float | None] = mapped_column(Float)
+    ledger_id: Mapped[int | None] = mapped_column(ForeignKey("ledger.id"), unique=True)
+
 
 class Incident(Base):
     __tablename__ = "incidents"

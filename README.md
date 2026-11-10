@@ -106,6 +106,10 @@ Separate live checks verified account authorization and found no duplicate impor
 
 **Automated tests.** Synthetic messages and mocked Gmail responses cover Inbox and Spam ingestion, history recovery, account matching, and OAuth callback security. The Gmail listing requests the result estimate so an empty Inbox or Spam page still returns JSON and sync can finish. Model health is separate from Gmail connection health.
 
+## Automatic Gmail link analysis
+
+New Gmail imports receive background static URL analysis. Open a message or the Decision Ledger to see scan state, static severity, and evidence. External browsing is disabled, so page behavior remains unknown. Link Lab still runs its manual simulation. Gmail remains read-only and MailAgent decisions stay independent of link findings. See [Phase 5A](PHASE5A.md) for the limits, controlled fixtures, and verification.
+
 ## Source and recovery
 
 GitHub holds the reproducible source, dependency manifests and lockfile, tests, dataset provenance, and aggregate evaluation reports. Local timestamped snapshots hold the complete recovery copy, including installed environments, raw datasets, fitted models, SQLite, and Git metadata where present. Credentials, databases, downloaded datasets, fitted models, dependencies, caches, build output, and backups stay out of tracked source.

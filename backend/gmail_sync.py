@@ -6,6 +6,7 @@ from threading import Event
 from sqlalchemy import select, update
 from sqlalchemy.dialects.sqlite import insert
 
+from .email_link_scans import enqueue_email_links
 from .gmail_mime import parse_message
 from .gmail_oauth import GmailError, SavedAuthorization, read_config
 from .models import Email, GmailSyncState, now_utc
@@ -148,12 +149,16 @@ class GmailSync:
         label, received = location
         self.check_stop()
         with self.sessions.begin() as db:
-            db.execute(insert(Email).values(
+            email_id = db.scalar(insert(Email).values(
                 **fields, source="gmail", account_key=key, external_message_id=message_id,
                 received_at=received, source_label=label, verdict="PENDING", risk_score=0,
                 reasons=["Queued for automatic MailAgent inbox processing."], folder="Inbox",
                 processed=False, revoked=False, created_at=now_utc(),
-            ).on_conflict_do_nothing(index_elements=["source", "account_key", "external_message_id"]))
+            ).on_conflict_do_nothing(
+                index_elements=["source", "account_key", "external_message_id"],
+            ).returning(Email.id))
+            if email_id is not None:
+                enqueue_email_links(db, email_id, fields["urls"])
 
     def bounded_resync(self, client, key, cutoff_ms):
         # Gmail's labelIds list is an AND filter, so query each separately.

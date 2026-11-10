@@ -5,11 +5,12 @@ from fastapi import Depends, FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import update
+from sqlalchemy import select, update
 from .database import MAIL_SOURCE, initialize_database, SessionLocal
-from .models import Email, Event, LedgerEntry, Allowlist, LinkScan, Incident
+from .models import Email, EmailLinkScan, Event, LedgerEntry, Allowlist, LinkScan, Incident
 from .mail_model import MailModel, load_mail_model
 from .gmail_sync import GmailSync
+from .email_link_scans import public_scan, scan_worker
 from .agents.mail_agent import MailAgent
 from .event_bus import bus
 from .agents.link_agent import LinkAgent, analyze_file as analyze_uploaded_file
@@ -120,12 +121,13 @@ async def lifespan(app):
     initialize_database()
     mail_model = await asyncio.to_thread(load_mail_model)
     shutdown = asyncio.Event()
-    gmail_task = None
+    gmail_task = link_task = None
     if MAIL_SOURCE == "simulated":
         seed_simulated_data()
     else:
         gmail_sync = GmailSync(SessionLocal)
         gmail_task = asyncio.create_task(gmail_poller(gmail_sync, shutdown))
+        link_task = asyncio.create_task(scan_worker(SessionLocal, chief_agent, bus, shutdown))
     poller = asyncio.create_task(mail_poller())
     try:
         yield
@@ -137,7 +139,7 @@ async def lifespan(app):
         try: await poller
         except asyncio.CancelledError: pass
         if gmail_task is not None:
-            await gmail_task
+            await asyncio.gather(gmail_task, link_task)
             gmail_sync = None
 
 
@@ -195,7 +197,15 @@ def get_emails(folder: str | None = None):
     with SessionLocal() as db:
         q = db.query(Email).order_by(Email.created_at.desc())
         if folder: q = q.filter(Email.folder == folder)
-        return [serialize(x) for x in q.all()]
+        if MAIL_SOURCE != "gmail":
+            return [serialize(email) for email in q.all()]
+        scans = {}
+        job_query = select(EmailLinkScan).order_by(EmailLinkScan.position)
+        if folder:
+            job_query = job_query.join(Email).where(Email.folder == folder)
+        for scan in db.scalars(job_query):
+            scans.setdefault(scan.email_id, []).append(public_scan(scan))
+        return [dict(serialize(email), link_scans=scans.get(email.id, [])) for email in q.all()]
 
 @app.get("/api/events")
 def get_events(limit: int = 100):
@@ -203,7 +213,12 @@ def get_events(limit: int = 100):
 
 @app.get("/api/ledger")
 def get_ledger():
-    with SessionLocal() as db: return [serialize(x) for x in db.query(LedgerEntry).order_by(LedgerEntry.id.desc()).all()]
+    with SessionLocal() as db:
+        rows = db.execute(select(LedgerEntry, EmailLinkScan).outerjoin(
+            EmailLinkScan, EmailLinkScan.ledger_id == LedgerEntry.id,
+        ).order_by(LedgerEntry.id.desc()))
+        return [dict(serialize(entry), link_scan=public_scan(scan)) if scan else serialize(entry)
+                for entry, scan in rows]
 
 @app.get("/api/stats")
 def get_stats():
@@ -292,7 +307,7 @@ def reset():
     require_simulated()
     from sqlalchemy import delete
     with SessionLocal() as db:
-        for model in (LedgerEntry, Event, Email, Allowlist, LinkScan, Incident): db.execute(delete(model))
+        for model in (EmailLinkScan, LedgerEntry, Event, Email, Allowlist, LinkScan, Incident): db.execute(delete(model))
         db.commit()
     seed_simulated_data()
     return {"status": "reset"}

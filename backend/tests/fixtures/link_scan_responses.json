@@ -1,0 +1,60 @@
+{
+  "/benign": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "text/html"
+    },
+    "body": "<!doctype html><title>Fixture welcome</title><h1>Community calendar</h1><p>A synthetic page with no forms or downloads.</p>"
+  },
+  "/fake-credential-form": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "text/html"
+    },
+    "body": "<!doctype html><title>Fake sign-in fixture</title><form method=\"post\" action=\"/never-submit\"><label>Account <input name=\"account\"></label><label>Password <input type=\"password\" name=\"password\"></label><button>Sign in</button></form>"
+  },
+  "/download": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/octet-stream",
+      "Content-Disposition": "attachment; filename=fixture.txt"
+    },
+    "body": "Synthetic text. Do not save or execute this response."
+  },
+  "/redirect-loopback": {
+    "status": 302,
+    "headers": {
+      "Location": "http://127.0.0.1:8765/forbidden"
+    },
+    "body": ""
+  },
+  "/redirect-lan": {
+    "status": 302,
+    "headers": {
+      "Location": "http://192.168.4.4/forbidden"
+    },
+    "body": ""
+  },
+  "/redirect-metadata": {
+    "status": 302,
+    "headers": {
+      "Location": "http://169.254.169.254/forbidden"
+    },
+    "body": ""
+  },
+  "/redirect-ipv6": {
+    "status": 302,
+    "headers": {
+      "Location": "http://[::1]/forbidden"
+    },
+    "body": ""
+  },
+  "/slow": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "text/plain"
+    },
+    "delay_seconds": 20,
+    "body": "Response deliberately past the proposed 12-second browser budget."
+  }
+}
