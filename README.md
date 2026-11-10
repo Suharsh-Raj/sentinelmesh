@@ -64,6 +64,8 @@ New-Item -ItemType Directory -Force -Path .ml-cache | Out-Null
 
 On the 3,339-message held-out set, phishing precision was **89.46%**, recall **99.66%**, F1 **94.29%**, average precision **0.9952**, false-positive rate **1.15%**, and accuracy **98.92%**. Every legitimate example came from Enron and every phishing example came from Nazario. The benchmark cannot separate corpus recognition from phishing detection, and performance on modern Gmail remains unmeasured. [Evaluation and limitations](ml/EVALUATION.md) · [Dataset provenance and fingerprints](ml/DATASET.md)
 
+The [Phase 4A offline evaluator and independent results](ml/PHASE4A.md) show how the frozen model transfers beyond Enron/Nazario and where it generates false positives.
+
 ## Read-only Gmail setup
 
 Gmail mode is for one explicitly configured mailbox. Gmail is only read from the local application. The browser is opened for sign-in only when you run the separate setup command. SentinelMesh requests only the [Gmail read-only scope](https://developers.google.com/workspace/gmail/api/auth/scopes). Local Block, Quarantine, and Revoke affect the SentinelMesh database and allowlist. They do not change labels, move, delete, send, or mark messages read in Gmail.

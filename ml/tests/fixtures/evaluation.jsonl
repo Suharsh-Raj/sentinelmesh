@@ -1,0 +1,3 @@
+{"id":"synthetic-01","subject":"Workshop bulletin","body":"Our studio is holding an open afternoon on Saturday. Browse the class schedule if you would like to attend.","label":"legitimate","source":"synthetic-mechanics","category":"promotion","group_id":"workshop"}
+{"id":"synthetic-02","subject":"Account review needed","body":"To prevent suspension, enter your password and recovery code using the form.","label":"phishing","source":"synthetic-mechanics","category":"credential_request"}
+{"id":"synthetic-03","subject":"An unexpected attachment","body":"Please see the attached document before the meeting.","label":"uncertain","source":"synthetic-mechanics","category":"ambiguous"}
