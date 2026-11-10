@@ -96,7 +96,11 @@ The first successful account connection records the cutoff in UTC. Gmail's inter
 
 The parser prefers plain text, extracts readable text and inert HTTP(S) URLs from HTML, and does not load images, visit links, or fetch ordinary file attachments. It caps downloaded data and stored text; messages with omissions or truncation show a notice in message details.
 
-Phase 3 tests exercise Inbox and Spam, history recovery, account matching, and OAuth callback security with synthetic data and mocked Google requests. The Gmail listing requests the result estimate so an empty Inbox or Spam page still returns a JSON response and sync can finish. Live verification covered account authorization, an imported Inbox message, and duplicate checking across repeated polls and a restart. Live Spam ingestion remains pending. Model health is separate from Gmail connection health.
+**User-verified live ingestion.** A forwarded message appeared in SentinelMesh from Gmail Inbox. A separate newly forwarded message was moved to Gmail Spam before import, and SentinelMesh displayed **Gmail · Spam** in its details. These checks confirm ingestion and source labeling. They do not measure phishing detection accuracy.
+
+Separate live checks verified account authorization and found no duplicate imports across repeated polls and a restart.
+
+**Automated tests.** Synthetic messages and mocked Gmail responses cover Inbox and Spam ingestion, history recovery, account matching, and OAuth callback security. The Gmail listing requests the result estimate so an empty Inbox or Spam page still returns JSON and sync can finish. Model health is separate from Gmail connection health.
 
 ## Source and recovery
 
