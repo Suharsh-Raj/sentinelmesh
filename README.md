@@ -66,6 +66,8 @@ On the 3,339-message held-out set, phishing precision was **89.46%**, recall **9
 
 The [Phase 4A offline evaluator and independent results](ml/PHASE4A.md) show how the frozen model transfers beyond Enron/Nazario and where it generates false positives.
 
+[Phase 4B](ml/PHASE4B.md) records the English evaluation data gap, the frozen comparison criteria, and the offline split audit. SentinelMesh continues to use the v1 advisory model.
+
 ## Read-only Gmail setup
 
 Gmail mode is for one explicitly configured mailbox. Gmail is only read from the local application. The browser is opened for sign-in only when you run the separate setup command. SentinelMesh requests only the [Gmail read-only scope](https://developers.google.com/workspace/gmail/api/auth/scopes). Local Block, Quarantine, and Revoke affect the SentinelMesh database and allowlist. They do not change labels, move, delete, send, or mark messages read in Gmail.
