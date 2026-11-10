@@ -100,15 +100,20 @@ export function DashboardDialog({panel, onClose, alerts, emails, openMessage, op
   const agent = agents.find(item => item.name === panel);
   const status = agent && agentStatus(health, runtime?.[agent.name]);
   const activity = agent ? agentActivity(agent.name, events, ledger, incidents) : [];
-  const navigate = (action) => {
+  const close = () => {
     dialog.current.close();
+    onClose();
+  };
+  const navigate = (action) => {
+    close();
     action();
   };
-  return <dialog ref={dialog} onClose={onClose} className="dashboard-dialog" aria-labelledby="dashboard-dialog-title">
+  return <dialog ref={dialog} onCancel={event => {event.preventDefault(); close();}}
+    className="dashboard-dialog" aria-labelledby="dashboard-dialog-title">
     <div className="dashboard-dialog-header">
       <h2 id="dashboard-dialog-title">{notifications ? 'Notifications' : agent?.name}</h2>
       <button ref={closeButton} className="icon-button" type="button" aria-label="Close panel"
-        onClick={() => dialog.current.close()}><X size={17}/></button>
+        onClick={close}><X size={17}/></button>
     </div>
     {notifications ? alerts.length ? <ul className="dashboard-panel-list">
       {alerts.map(alert => <li key={alert.id}>
