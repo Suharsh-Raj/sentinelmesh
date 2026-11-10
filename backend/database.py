@@ -44,6 +44,8 @@ def ensure_schema(db_engine, mail_source=None):
     additions = {
         "emails": {
             "processed": "BOOLEAN NOT NULL DEFAULT 1",
+            "manually_quarantined": "BOOLEAN NOT NULL DEFAULT 0",
+            "manual_quarantine_revision": "INTEGER NOT NULL DEFAULT 0",
             "reply_to": "VARCHAR(320) NOT NULL DEFAULT ''",
             "ml_analysis": "JSON",
             "source": "VARCHAR(20) NOT NULL DEFAULT 'simulated'",

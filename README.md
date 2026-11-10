@@ -16,6 +16,8 @@ The launcher uses `.ml-venv` when it exists and ML is enabled. Otherwise it crea
 
 Simulated is the default mode. Open **Demo controls** to submit a mail or link scenario. **Link Lab** shows the simulation timeline and static findings. Uploaded files are inspected in memory, and the simulated sandbox does not execute them or visit submitted URLs. **Decision Ledger** shows the original score and evidence. Revoke updates the existing ledger entry, records a separate event, and moves linked mail back to the local Inbox while allowlisting its sender. Reset demo data clears local decisions and the allowlist before reseeding. [Architecture and event flow](ARCHITECTURE.md)
 
+In the local dashboard, open **Message details** for a processed Inbox email and choose **Quarantine locally**. The Quarantine list labels it **Manually quarantined**. Reopen its details there or use **Undo manual quarantine** while the details are still open. Undo applies only to manual quarantine and does not allowlist the sender. Each move records a separate user action in the Decision Ledger without changing the MailAgent verdict, evidence, ML prediction, or link results. Automatic quarantine still uses the existing Revoke flow. Gmail folders and labels are unchanged, and the Pages preview has no write controls.
+
 Run the application tests in an isolated PowerShell session:
 
 ~~~powershell
@@ -27,7 +29,7 @@ Remove-Item Env:SENTINELMESH_DB
 
 ## Advisory ML mail analysis
 
-SentinelMesh loads the trusted local `mail-tfidf-v1` bundle once at startup. Newly processed mail gets an experimental prediction, including mail from allowlisted senders. Message details and the Decision Ledger show the model result separately from the rule score and evidence. The model uses an uncalibrated class-1 score and the threshold stored in its manifest. Rules determine the verdict, folder, and allowlist actions. Seeded and historical rows are displayed as “Not analyzed by ML.” Imported mail, Revoke, and allowlist changes do not train the model.
+SentinelMesh loads the trusted local `mail-tfidf-v1` bundle once at startup. Newly processed mail gets an experimental prediction, including mail from allowlisted senders. Message details and the Decision Ledger show the model result separately from the rule score and evidence. The model uses an uncalibrated class-1 score and the threshold stored in its manifest. Rules determine the verdict and initial folder. Seeded and historical rows are displayed as “Not analyzed by ML.” Imported mail, Revoke, and allowlist changes do not train the model.
 
 The default bundle directory is `ml/models/mail-tfidf-v1`. Restore the local Phase 1 bundle from a trusted backup or follow the training instructions below on a clean clone. Set `SENTINELMESH_MODEL_DIR` to use another trusted copy of that bundle. Set `SENTINELMESH_ML_ENABLED=0` before running the launcher to disable ML. With a missing, corrupt, or incompatible bundle, the dashboard and `GET /api/stats` show the model status and rules continue to process mail. The email, event, and ledger snapshots record whether an ML result was available.
 

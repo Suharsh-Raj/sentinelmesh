@@ -185,6 +185,11 @@ class EmailInput(BaseModel):
     urls: list[str] = Field(default_factory=list, max_length=30)
     reply_to: str = Field(default="", max_length=320)
 
+
+class ManualQuarantineInput(BaseModel):
+    quarantined: bool = Field(strict=True)
+    revision: int = Field(ge=0, le=2**63 - 2, strict=True)
+
 @app.get("/api/health")
 def health(): return {"status": "ok", "service": "SentinelMesh", "agents": ["MailAgent", "LinkAgent", "ChiefAgent"]}
 
@@ -211,6 +216,52 @@ def get_emails(folder: str | None = None):
         for scan in db.scalars(job_query):
             scans.setdefault(scan.email_id, []).append(public_scan(scan))
         return [dict(serialize(email), link_scans=scans.get(email.id, [])) for email in q.all()]
+
+
+@app.put("/api/emails/{email_id}/manual-quarantine")
+async def set_manual_quarantine(email_id: int, payload: ManualQuarantineInput):
+    """Change the local folder and audit it in the same SQLite transaction."""
+    quarantined = payload.quarantined
+    folder = "Quarantine" if quarantined else "Inbox"
+    event = None
+    with SessionLocal.begin() as db:
+        # Compare the revision as part of the write, so concurrent requests and
+        # stale retries cannot repeat a transition or undo a later action.
+        changed = db.execute(update(Email).where(
+            Email.id == email_id, Email.processed.is_(True),
+            Email.folder == ("Inbox" if quarantined else "Quarantine"),
+            Email.manually_quarantined.is_(not quarantined),
+            Email.manual_quarantine_revision == payload.revision,
+        ).values(
+            folder=folder, manually_quarantined=quarantined,
+            manual_quarantine_revision=Email.manual_quarantine_revision + 1,
+        )).rowcount == 1
+        email = db.get(Email, email_id)
+        if email is None:
+            raise HTTPException(404, "Message not found.")
+        if changed:
+            event = {
+                "timestamp": datetime.now(timezone.utc), "agent": "Operator",
+                "event_type": "manual_quarantine" if quarantined else "manual_quarantine_undone",
+                "target": email.subject,
+                "decision": "MANUAL_QUARANTINE" if quarantined else "MANUAL_QUARANTINE_UNDONE",
+                "risk_score": 0, "evidence": [],
+                "reasoning": f"Operator moved this message to the local {folder}.",
+                "data": {"email_id": email_id},
+            }
+            entry = chief_agent.record_decision(db, event)
+            db.flush()
+            event["data"]["ledger_id"] = entry.id
+            db.add(Event(**event))
+        elif not (email.manual_quarantine_revision == payload.revision + 1
+                  and email.manually_quarantined == quarantined and email.folder == folder):
+            raise HTTPException(409, "This action no longer applies to the message. Reload its details and try again.")
+        result = {key: getattr(email, key) for key in (
+            "id", "folder", "manually_quarantined", "manual_quarantine_revision",
+        )}
+    if event is not None:
+        bus.broadcast(event)
+    return result
 
 @app.get("/api/events")
 def get_events(limit: int = 100):
@@ -302,7 +353,8 @@ async def revoke(entry_id: int, who: str = "Operator"):
         entry.status = "REVOKED"; entry.revoked_by = who; entry.revoked_at = datetime.now(timezone.utc)
         email = db.get(Email, entry.email_id) if entry.email_id else None
         if email:
-            email.folder = "Inbox"; email.revoked = True
+            if not email.manually_quarantined: email.folder = "Inbox"
+            email.revoked = True
             if not db.query(Allowlist).filter(Allowlist.sender == email.sender.lower()).first(): db.add(Allowlist(sender=email.sender.lower()))
         db.commit(); db.refresh(entry); result = serialize(entry)
     event_data = {"ledger_id": entry_id}

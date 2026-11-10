@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from fastapi import HTTPException
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -16,7 +17,7 @@ from sqlalchemy.pool import StaticPool
 from backend import main as api
 from backend.database import ensure_schema
 from backend.mail_model import DEFAULT_BUNDLE, MailModel, load_mail_model
-from backend.models import Allowlist, Email, Event, LedgerEntry
+from backend.models import Allowlist, Email, EmailLinkScan, Event, LedgerEntry
 
 
 def memory_engine():
@@ -123,6 +124,92 @@ class MailModelFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(released["ml_analysis"], before["ml_analysis"])
         self.assertEqual(api.get_events()[0]["data"]["ml_analysis"], before["ml_analysis"])
 
+    async def test_manual_quarantine_round_trip_preserves_gmail_analysis_and_audits_once(self):
+        queued = await api.submit_email(api.EmailInput(
+            sender="friend@example.org", subject="Synthetic status",
+            body="Weekly agenda", urls=["https://example.org"],
+        ))
+        email_id = queued["email_id"]
+        with self.sessions.begin() as db:
+            email = db.get(Email, email_id)
+            email.source = "gmail"
+            email.source_label = "Inbox"
+            db.add(EmailLinkScan(email_id=email_id, position=1, state="complete",
+                                 severity="none", score=0, evidence=["Synthetic result"]))
+        await api.process_pending_emails()
+        self.queue.get_nowait()
+        original = api.get_ledger()[0]
+        move = api.ManualQuarantineInput(quarantined=True, revision=0)
+        undo = api.ManualQuarantineInput(quarantined=False, revision=1)
+        with patch.object(api, "MAIL_SOURCE", "gmail"):
+            before = api.get_emails("Inbox")[0]
+            self.assertEqual(before["verdict"], "ALLOW")
+            moved = await api.set_manual_quarantine(email_id, move)
+            self.assertEqual(moved, await api.set_manual_quarantine(email_id, move))
+            self.assertEqual(api.get_emails("Inbox"), [])
+            quarantined = api.get_emails("Quarantine")[0]
+            self.assertTrue(quarantined["manually_quarantined"])
+            restored = await api.set_manual_quarantine(email_id, undo)
+            self.assertEqual(restored, await api.set_manual_quarantine(email_id, undo))
+            self.assertEqual(api.get_emails("Quarantine"), [])
+            after = api.get_emails("Inbox")[0]
+            self.assertEqual(quarantined, dict(before, folder="Quarantine", manually_quarantined=True,
+                                               manual_quarantine_revision=1))
+            self.assertEqual(after, dict(before, manual_quarantine_revision=2))
+            with self.assertRaises(HTTPException) as stale:
+                await api.set_manual_quarantine(email_id, move)
+            self.assertEqual(stale.exception.status_code, 409)
+            self.assertEqual(api.get_emails("Inbox")[0], after)
+        undone_entry, manual_entry, original_entry = api.get_ledger()
+        self.assertEqual(original_entry, original)
+        for entry, decision, event_type in (
+            (manual_entry, "MANUAL_QUARANTINE", "manual_quarantine"),
+            (undone_entry, "MANUAL_QUARANTINE_UNDONE", "manual_quarantine_undone"),
+        ):
+            self.assertEqual((entry["agent"], entry["decision"], entry["email_id"]),
+                             ("Operator", decision, email_id))
+            self.assertEqual(self.queue.get_nowait()["data"]["ledger_id"], entry["id"])
+            events = [event for event in api.get_events() if event["event_type"] == event_type]
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]["data"]["ledger_id"], entry["id"])
+        self.assertTrue(self.queue.empty())
+        with self.sessions() as db:
+            self.assertIsNone(db.scalar(select(Allowlist)))
+
+    async def test_manual_undo_does_not_release_automatic_quarantine(self):
+        email_id = await self.submit()
+        move = api.ManualQuarantineInput(quarantined=True, revision=0)
+        with self.assertRaises(HTTPException) as pending:
+            await api.set_manual_quarantine(email_id, move)
+        self.assertEqual(pending.exception.status_code, 409)
+        await api.process_pending_emails()
+        self.assertEqual(api.get_emails("Quarantine")[0]["verdict"], "QUARANTINE")
+        for request in (move, api.ManualQuarantineInput(quarantined=False, revision=0)):
+            with self.assertRaises(HTTPException) as automatic:
+                await api.set_manual_quarantine(email_id, request)
+            self.assertEqual(automatic.exception.status_code, 409)
+        (decision,) = api.get_ledger()
+        await api.revoke(decision["id"])
+        self.assertTrue(api.get_emails("Inbox")[0]["revoked"])
+        with self.sessions() as db:
+            self.assertEqual(db.scalar(select(Allowlist)).sender, "friend@example.org")
+
+    async def test_failed_manual_audit_rolls_back_both_folder_transitions(self):
+        queued = await api.submit_email(api.EmailInput(sender="friend@example.org", subject="Weekly agenda"))
+        await api.process_pending_emails()
+        self.queue.get_nowait()
+        email_id = queued["email_id"]
+        for revision, quarantine in enumerate((True, False)):
+            request = api.ManualQuarantineInput(quarantined=quarantine, revision=revision)
+            before = (api.get_emails(), api.get_ledger(), api.get_events())
+            with patch.object(api.chief_agent, "record_decision", side_effect=RuntimeError("audit failed")):
+                with self.assertRaisesRegex(RuntimeError, "audit failed"):
+                    await api.set_manual_quarantine(email_id, request)
+            self.assertEqual((api.get_emails(), api.get_ledger(), api.get_events()), before)
+            self.assertTrue(self.queue.empty())
+            await api.set_manual_quarantine(email_id, request)
+            self.queue.get_nowait()
+
     async def test_ledger_write_failure_rolls_back_and_retry_publishes_once(self):
         email_id = await self.submit()
         with patch.object(api.chief_agent, "record_decision", side_effect=RuntimeError("write failure")):
@@ -206,6 +293,8 @@ class MailMigrationTests(unittest.TestCase):
                                evidence=email.reasons, email_id=email.id))
         with engine.begin() as connection:
             connection.exec_driver_sql("ALTER TABLE emails DROP COLUMN ml_analysis")
+            connection.exec_driver_sql("ALTER TABLE emails DROP COLUMN manually_quarantined")
+            connection.exec_driver_sql("ALTER TABLE emails DROP COLUMN manual_quarantine_revision")
             connection.exec_driver_sql("ALTER TABLE ledger DROP COLUMN ml_analysis")
         ensure_schema(engine)
         ensure_schema(engine)
@@ -213,6 +302,8 @@ class MailMigrationTests(unittest.TestCase):
             email = db.scalars(select(Email)).one()
             entry = db.scalars(select(LedgerEntry)).one()
             self.assertTrue(email.processed)
+            self.assertFalse(email.manually_quarantined)
+            self.assertEqual(email.manual_quarantine_revision, 0)
             self.assertEqual(email.reasons, ["Original evidence"])
             self.assertEqual(entry.evidence, email.reasons)
             self.assertIsNone(email.ml_analysis)

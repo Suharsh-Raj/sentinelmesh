@@ -6,6 +6,10 @@ import{AreaChart,Area,XAxis,YAxis,Tooltip,ResponsiveContainer,BarChart,Bar,Carte
 const API='/api';
 const PAGES_DEMO = import.meta.env.VITE_PAGES_DEMO === 'true';
 const SEEN_ALERTS_KEY = 'sentinelmesh.seen-alerts';
+const MANUAL_QUARANTINE_LABELS = {
+  MANUAL_QUARANTINE: 'Manual quarantine',
+  MANUAL_QUARANTINE_UNDONE: 'Manual quarantine undone',
+};
 
 function readSeenAlerts() {
   try {
@@ -168,11 +172,33 @@ function App(){
  const notice=(x)=>setToast(x);
  const sendEmail=async form=>{setBusy(true);try{const r=await fetch(`${API}/emails`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(form)});if(!r.ok)throw Error((await r.json()).detail||'Could not scan email');const x=await r.json();notice(`MailAgent · ${x.verdict} · risk ${x.risk_score}`);await refresh();return x}catch(e){notice(e.message||'Backend unavailable. Start the local server and retry.')}finally{setBusy(false)}};
  const gmailMode=stats.mail_source==='gmail', demoControls=!PAGES_DEMO&&stats.mail_source==='simulated';
+ const changeManualQuarantine = async (email, quarantined) => {
+   const response = await fetch(`${API}/emails/${email.id}/manual-quarantine`, {
+     method: 'PUT',
+     headers: {'Content-Type': 'application/json'},
+     body: JSON.stringify({quarantined, revision: email.manual_quarantine_revision}),
+     signal: AbortSignal.timeout(12000),
+   });
+   if (!response.ok) {
+     if (response.status === 409) {
+       await refresh();
+       throw new Error('This action no longer applies. Check the current message details.');
+     }
+     throw new Error('Could not update the local folder.');
+   }
+   const updated = await response.json();
+   // Let any pre-write dashboard fetch finish before applying the committed state.
+   await refreshInFlight.current;
+   setEmails(rows => rows.map(row => row.id === updated.id && row.created_at === email.created_at &&
+     row.manual_quarantine_revision <= updated.manual_quarantine_revision ? {...row, ...updated} : row));
+   notice(MANUAL_QUARANTINE_LABELS[quarantined ? 'MANUAL_QUARANTINE' : 'MANUAL_QUARANTINE_UNDONE']);
+   void refresh();
+ };
  const revoke=async id=>{try{const r=await fetch(`${API}/ledger/${id}/revoke?who=Operator`,{method:'POST'});if(!r.ok)throw Error((await r.json()).detail||'Revoke failed');notice(gmailMode?'Local decision revoked · Gmail unchanged':'Decision revoked · sender added to allowlist');await refresh();setSelected(null)}catch(e){notice(e.message)}};
  const analyzeLink=async(url,scenario='credential_harvester',file=null)=>{setBusy(true);try{let r;if(file){const form=new FormData();form.append('file',file);form.append('scenario',scenario);r=await fetch(`${API}/links/upload`,{method:'POST',body:form})}else r=await fetch(`${API}/links/analyze`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,scenario})});if(!r.ok)throw Error((await r.json()).detail||'Link analysis failed');const x=await r.json();setLinkReport(x);notice(`LinkAgent · ${x.verdict} · risk ${x.risk_score}`);await refresh();return x}catch(e){notice(e.message||'Link analysis failed.')}finally{setBusy(false)}};
  const reset=async()=>{try{const r=await fetch(`${API}/reset`,{method:'POST'});if(!r.ok)throw Error('Reset failed');setLinkReport(null);notice('Demo state reset to the historical baseline.');await refresh()}catch{notice('Reset failed.')} };
  const activeEmails=useMemo(()=>emails.filter(e=>{const ok=filter==='All'||(filter==='Inbox'?e.folder==='Inbox':e.folder==='Quarantine');const q=query.toLowerCase();return ok&&(!q||`${e.sender} ${e.subject} ${e.display_name}`.toLowerCase().includes(q))}),[emails,filter,query]);
- const nav=[{name:'Dashboard',icon:Activity},{name:'Inbox',icon:InboxIcon,count:emails.filter(e=>e.folder==='Inbox').length},{name:'Quarantine',icon:ShieldAlert,count:emails.filter(e=>e.folder==='Quarantine'&&!e.revoked).length},{name:'Link Lab',icon:Link2},{name:'Decision Ledger',icon:BookOpen}];
+ const nav=[{name:'Dashboard',icon:Activity},{name:'Inbox',icon:InboxIcon,count:emails.filter(e=>e.folder==='Inbox').length},{name:'Quarantine',icon:ShieldAlert,count:emails.filter(e=>e.folder==='Quarantine').length},{name:'Link Lab',icon:Link2},{name:'Decision Ledger',icon:BookOpen}];
  const rangeEnd=chartEnd,rangeStart=rangeEnd-CHART_RANGE_MS;const chartTicks=Array.from({length:7},(_,i)=>rangeStart+(rangeEnd-rangeStart)*i/6);
  const tone=v=>v==='ALLOW'||v==='SAFE'?'green':v==='QUARANTINE'||v==='SUSPICIOUS'?'amber':v==='BLOCK'||v==='MALICIOUS'?'red':'neutral';
  const onClickScenario=async item=>sendEmail(item[1]);
@@ -213,14 +239,14 @@ function App(){
  {page==='Link Lab'&&<LinkLab analyze={analyzeLink} links={links} incidents={incidents} busy={busy} tone={tone} externalReport={linkReport}/>}
  <footer className="footer"><span>SentinelMesh <b>·</b> Multi-agent email & link defense</span><span>{PAGES_DEMO?"GitHub Pages preview":"Local evaluation environment"} <b>·</b> {new Date().toLocaleDateString()}</span></footer></div></main>
  {drawer&&demoControls&&<div className="drawer-backdrop" onClick={()=>setDrawer(false)}><aside className="demo-drawer" onClick={e=>e.stopPropagation()}><div className="drawer-head"><div><div className="eyebrow">EVALUATION TOOLS</div><h2>Demo control panel</h2><p>Trigger scenarios to explore the defense mesh.</p></div><button className="icon-button" onClick={()=>setDrawer(false)}><X size={17}/></button></div><div className="drawer-section-title">EMAIL SCENARIOS <span>01 — 05</span></div><div className="scenario-list">{scenarios.map(([title,payload],i)=><button className="scenario-button" key={title} disabled={busy} onClick={()=>onClickScenario([title,payload])}><span className={`scenario-number n${i}`}>0{i+1}</span><span>{title}</span><ArrowUpRight size={14}/></button>)}</div><div className="drawer-section-title link-scenarios-title">LINK SCENARIOS <span>06 — 09</span></div><div className="scenario-list">{[['Analyze credential-harvesting link','https://amazon.com.evil-login.xyz/verify','credential_harvester'],['Analyze malicious download link','http://203.0.113.42:8080/update.exe','drive_by_download'],['Analyze benign link','https://www.google.com/search?q=campus+calendar','benign']].map(([title,url,scenario],i)=><button className="scenario-button" key={title} disabled={busy} onClick={()=>{setPage('Link Lab');analyzeLink(url,scenario)}}><span className={`scenario-number n${i===2?3:i}`}>0{i+6}</span><span>{title}</span><ArrowUpRight size={14}/></button>)}<button className="scenario-button" disabled={busy} onClick={()=>{const signature='X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*';const sample=new File([signature],'eicar-test.txt',{type:'text/plain'});setPage('Link Lab');analyzeLink('', 'drive_by_download',sample)}}><span className="scenario-number n2">09</span><span>Analyze EICAR test file</span><ArrowUpRight size={14}/></button></div><div className="drawer-separator"/><div className="drawer-section-title">COMPOSE A TEST EMAIL <span>MANUAL INPUT</span></div><ManualForm submit={sendEmail} busy={busy}/><div className="drawer-bottom"><button className="reset-button" onClick={reset}><RotateCcw size={14}/> Reset demo data</button><span>Actions are recorded to the ledger.</span></div></aside></div>}
- {selectedEmail&&<EmailDetail email={selectedEmail} onClose={()=>setSelected(null)} tone={tone}/>}
+ {selectedEmail&&<EmailDetail email={selectedEmail} onClose={()=>setSelected(null)} tone={tone} changeManualQuarantine={changeManualQuarantine}/>}
  <DashboardDialog panel={panel} onClose={() => setPanel(null)} alerts={alerts} emails={emails}
    openMessage={id => setSelected({id})} openLedger={id => {setPage('Decision Ledger'); setLedgerJump(id ?? null);}}
    health={agentHealth} runtime={stats.agent_runtime} events={events} ledger={ledger} incidents={incidents}/>
  {toast&&<div className="toast"><div className="toast-check"><Check size={15}/></div>{toast}<button onClick={()=>setToast('')}><X size={14}/></button></div>}
  </div>
 }
-function EmailTable({rows,onSelect,tone}){return <div className="table-scroll"><table><thead><tr><th>SENDER</th><th>SUBJECT</th><th>RISK SCORE</th><th>VERDICT</th><th>RECEIVED</th><th/></tr></thead><tbody>{rows.map(e=><tr key={e.id} onClick={()=>onSelect(e)}><td><div className="sender-cell"><div className="sender-avatar">{e.display_name?.slice(0,1)||e.sender[0]}</div><div><b>{e.display_name||e.sender}</b><small>{e.sender}</small></div></div></td><td className="subject-cell">{e.subject}{e.source==='gmail'&&<small className="gmail-source-label">Gmail · {e.source_label}</small>}</td><td><div className="risk-cell"><div className="risk-track"><i style={{width:`${e.risk_score}%`,background:e.risk_score>64?'#ff6477':e.risk_score>27?'#edba63':'#38d9b7'}}/></div><b>{e.risk_score}</b></div></td><td><Badge tone={e.revoked?'green':tone(e.verdict)}>{e.revoked?'REVOKED':e.verdict}</Badge></td><td className="time-cell">{timeAgo(e.received_at||e.created_at)}</td><td><ArrowUpRight size={14} className="table-arrow"/></td></tr>)}</tbody></table>{!rows.length&&<div className="no-rows">No messages found.</div>}</div>}
+function EmailTable({rows,onSelect,tone}){return <div className="table-scroll"><table><thead><tr><th>SENDER</th><th>SUBJECT</th><th>RISK SCORE</th><th>VERDICT</th><th>RECEIVED</th><th/></tr></thead><tbody>{rows.map(e=><tr key={e.id} onClick={()=>onSelect(e)}><td><div className="sender-cell"><div className="sender-avatar">{e.display_name?.slice(0,1)||e.sender[0]}</div><div><b>{e.display_name||e.sender}</b><small>{e.sender}</small></div></div></td><td className="subject-cell">{e.subject}{e.manually_quarantined&&<span className="manual-quarantine-label"><Badge tone="amber">Manually quarantined</Badge></span>}{e.source==='gmail'&&<small className="gmail-source-label">Gmail · {e.source_label}</small>}</td><td><div className="risk-cell"><div className="risk-track"><i style={{width:`${e.risk_score}%`,background:e.risk_score>64?'#ff6477':e.risk_score>27?'#edba63':'#38d9b7'}}/></div><b>{e.risk_score}</b></div></td><td><Badge tone={e.revoked?'green':tone(e.verdict)}>{e.revoked?'REVOKED':e.verdict}</Badge></td><td className="time-cell">{timeAgo(e.received_at||e.created_at)}</td><td><ArrowUpRight size={14} className="table-arrow"/></td></tr>)}</tbody></table>{!rows.length&&<div className="no-rows">No messages found.</div>}</div>}
 function MailPage({rows,onSelect,tone,filter,setFilter,query,setQuery,setDrawer,demoControls}){return <section className="panel mail-page panel-full"><div className="mail-toolbar"><div className="folder-tabs"><button className={filter==='Inbox'?'active':''} onClick={()=>setFilter('Inbox')}>Inbox</button><button className={filter==='Quarantine'?'active':''} onClick={()=>setFilter('Quarantine')}>Quarantine</button><button className={filter==='All'?'active':''} onClick={()=>setFilter('All')}>All mail</button></div><div className="mail-controls"><div className="search-field"><Search size={15}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search sender or subject"/><kbd>⌘ K</kbd></div><button className="button secondary filter-button"><Filter size={14}/> Filters</button>{demoControls&&<button className="button primary" onClick={()=>setDrawer(true)}><Plus size={15}/> Test email</button>}</div></div><div className="mail-context"><div><div className="eyebrow">MAIL PROTECTION <span className="eyebrow-divider">/</span> {filter.toUpperCase()}</div><h2>{filter==='All'?'All messages':filter}</h2><p>Every message is explained, scored, and accounted for.</p></div><div className="mail-tally"><span>{rows.length}</span> messages</div></div><EmailTable rows={rows} onSelect={onSelect} tone={tone}/></section>}
 const LINK_SCAN_STATES = {
   queued: 'Queued', running: 'Running', complete: 'Static check complete',
@@ -256,6 +282,40 @@ function EmailLinkResults({email}) {
   </section>;
 }
 
+function ManualQuarantineControl({email, change}) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState('');
+  const quarantined = email.manually_quarantined;
+  const canChange = !PAGES_DEMO && email.processed && Number.isInteger(email.manual_quarantine_revision) &&
+    (quarantined || email.folder === 'Inbox');
+  if (!quarantined && !canChange) return null;
+
+  const act = async () => {
+    setPending(true);
+    setError('');
+    try {
+      await change(email, !quarantined);
+    } catch (failure) {
+      setError(failure.message || 'Could not update the local folder.');
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return <section className="detail-section manual-quarantine-control" aria-label="Local quarantine">
+    {quarantined && <Badge tone="amber">Manually quarantined</Badge>}
+    {canChange && <>
+      <button type="button" className="button secondary" disabled={pending} onClick={act}>
+        {quarantined ? <RotateCcw size={15}/> : <ShieldAlert size={15}/>}
+        {quarantined ? 'Undo manual quarantine' : 'Quarantine locally'}
+      </button>
+      <p>Changes only the SentinelMesh folder.</p>
+      {pending && <p role="status">Updating local folder…</p>}
+      {error && <p role="alert" className="mail-sync-error">{error}</p>}
+    </>}
+  </section>;
+}
+
 function LedgerEvidence({item}) {
   return <><p>{item.reasoning}</p>{item.evidence?.length>0&&<details><summary>Evidence <span>{item.evidence.length}</span><ChevronDown size={13}/></summary><ul>{item.evidence.map((x,i)=><li key={i}>{x}</li>)}</ul></details>}</>;
 }
@@ -273,11 +333,11 @@ function LedgerPage({rows,revoke,tone,gmailMode,jump,finishJump}){
  }, [jump, filter, finishJump]);
  const visible=rows.filter(x=>filter==='ALL'||x.status===filter);
  return <section className="panel ledger-page panel-full">
-  <div className="ledger-toolbar"><div className="filter-pills">{['ALL','ACTIVE','REVOKED'].map(v=><button className={filter===v?'active':''} onClick={()=>setFilter(v)} key={v}>{v}<span>{v==='ALL'?rows.length:rows.filter(x=>x.status===v).length}</span></button>)}</div><span className="ledger-secure"><LockKeyhole size={13}/> {PAGES_DEMO?'SAMPLE DECISIONS':'IMMUTABLE EVENT RECORD'}</span></div>
-  <div className="ledger-intro"><div className="eyebrow">CHIEF AGENT <span className="eyebrow-divider">/</span> DECISION LEDGER</div><h2>Decisions with a complete trail.</h2><p>Each agent decision is timestamped with its evidence and plain-English reasoning.</p></div>
+  <div className="ledger-toolbar"><div className="filter-pills">{['ALL','ACTIVE','REVOKED'].map(v=><button className={filter===v?'active':''} onClick={()=>setFilter(v)} key={v}>{v}<span>{v==='ALL'?rows.length:rows.filter(x=>x.status===v).length}</span></button>)}</div><span className="ledger-secure"><LockKeyhole size={13}/> {PAGES_DEMO?'SAMPLE DECISIONS':'DECISION AND ACTION RECORD'}</span></div>
+  <div className="ledger-intro"><div className="eyebrow">CHIEF AGENT <span className="eyebrow-divider">/</span> DECISION LEDGER</div><h2>Decisions with a complete trail.</h2><p>Agent decisions and local operator actions are timestamped here.</p></div>
   <div className="ledger-list">{visible.map(item=><article className="ledger-entry" id={'ledger-entry-' + item.id} tabIndex={-1} key={item.id}>
-   <div className={`ledger-icon ${tone(item.decision)}`}>{item.agent==='MailAgent'?<Mail size={16}/>:<Link2 size={16}/>}</div>
-   <div className="ledger-main"><div className="ledger-line"><b>{item.target}</b>{!item.link_scan && <Badge tone={tone(item.decision)}>{item.decision}</Badge>}<Badge tone={item.status==='REVOKED'?'green':'neutral'}>{item.status}</Badge></div>{item.agent === 'MailAgent' ? <>
+   <div className={`ledger-icon ${tone(item.decision)}`}>{item.agent==='Operator'?<Shield size={16}/>:item.agent==='MailAgent'?<Mail size={16}/>:<Link2 size={16}/>}</div>
+   <div className="ledger-main"><div className="ledger-line"><b>{item.target}</b>{!item.link_scan && <Badge tone={tone(item.decision)}>{MANUAL_QUARANTINE_LABELS[item.decision] ?? item.decision}</Badge>}{item.agent==='Operator'?<Badge>User action</Badge>:<Badge tone={item.status==='REVOKED'?'green':'neutral'}>{item.status}</Badge>}</div>{item.agent === 'MailAgent' ? <>
       <section className="ledger-rules">
         <h3>Rule-based assessment</h3>
         {gmailMode&&<p>{GMAIL_LOCAL_ONLY}</p>}
@@ -314,5 +374,5 @@ function LinkLab({analyze,links,incidents,busy,tone,externalReport}){
  </div>
 }
 function ManualForm({submit,busy}){const[sender,setSender]=useState(''),[name,setName]=useState(''),[subject,setSubject]=useState(''),[body,setBody]=useState(''),[urls,setUrls]=useState(''),[reply,setReply]=useState('');return <form className="manual-form" onSubmit={e=>{e.preventDefault();if(!sender||!subject)return;submit({sender,display_name:name,subject,body,urls:urls.split(/[\n,]+/).map(x=>x.trim()).filter(Boolean),reply_to:reply});}}><label>Sender address<input type="email" placeholder="sender@example.com" value={sender} onChange={e=>setSender(e.target.value)} required/></label><label>Display name<input placeholder="Sender display name" value={name} onChange={e=>setName(e.target.value)}/></label><label>Subject<input placeholder="Email subject" value={subject} onChange={e=>setSubject(e.target.value)} required/></label><label>Message body<textarea placeholder="Paste message content to analyze…" rows="3" value={body} onChange={e=>setBody(e.target.value)}/></label><label>Embedded URLs <span className="optional">OPTIONAL · ONE PER LINE</span><textarea placeholder="https://example.com/login" rows="2" value={urls} onChange={e=>setUrls(e.target.value)}/></label><label>Reply-To <span className="optional">OPTIONAL</span><input placeholder="reply@example.com" value={reply} onChange={e=>setReply(e.target.value)}/></label><button className="button primary submit-email" disabled={busy}><ScanLine size={15}/>{busy?'Scanning…':'Analyze email'}<ArrowUpRight size={14}/></button></form>}
-function EmailDetail({email,onClose,tone}){const highlight=s=>{const chars=[...String(s)];return chars.map((c,i)=>{const n=c.codePointAt(0),isSuspicious=n>127;return <span className={isSuspicious?'sus-char':''} title={isSuspicious?`U+${n.toString(16).toUpperCase().padStart(4,'0')} ${c.codePointAt(0).toString(16).toUpperCase()}`:undefined} key={i}>{c}</span>})};return <div className="drawer-backdrop detail-backdrop" onClick={onClose}><aside className="detail-panel" onClick={e=>e.stopPropagation()}><div className="detail-top"><div><div className="eyebrow">MESSAGE FORENSICS <span className="eyebrow-divider">/</span> ID-{String(email.id).padStart(4,'0')}</div><h2>Message details</h2></div><button className="icon-button" onClick={onClose}><X size={17}/></button></div><div className="detail-verdict"><div><span className={`verdict-symbol ${tone(email.verdict)}`}>{tone(email.verdict)==='green'?<ShieldCheck size={18}/>:<ShieldAlert size={18}/>}</span><div><b>{email.verdict==='PENDING'?'Analysis pending':email.source==='gmail'?(email.revoked?'Local decision revoked':`Local verdict: ${email.verdict}`):email.verdict==='ALLOW'?'Message allowed':email.revoked?'Decision revoked':'Message contained'}</b><small>MailAgent decision · Risk score {email.risk_score}/100</small></div></div><Badge tone={tone(email.verdict)}>{email.verdict}</Badge></div><div className="detail-fields"><div><span>FROM</span><strong>{highlight(email.display_name)} <small>&lt;{highlight(email.sender)}&gt;</small></strong></div><div><span>SUBJECT</span><strong>{email.subject}</strong></div>{email.source==='gmail'&&<div><span>MAIL SOURCE</span><strong>Gmail · {email.source_label}</strong></div>}<div><span>RECEIVED</span><strong>{new Date(email.received_at||email.created_at).toLocaleString()}</strong></div>{email.source==='gmail'&&<div><span>IMPORTED LOCALLY</span><strong>{new Date(email.created_at).toLocaleString()}</strong></div>}</div><div className="detail-section"><h3><FileWarning size={15}/> Rule-based assessment <span>{email.reasons.length}</span></h3><div className="evidence-list">{email.reasons.map((r,i)=><div className="evidence-item" key={i}><span className="evidence-mark"><AlertTriangle size={13}/></span><span>{r}</span></div>)}</div></div><ModelPrediction analysis={email.ml_analysis} pending={!email.processed}/><EmailLinkResults email={email}/><div className="detail-section"><h3><Mail size={15}/> Message body</h3><div className="body-preview">{email.body||'No message body available.'}</div>{email.content_limits?.length>0&&<p className="mail-sync-error">Some content was omitted, truncated, or could not be decoded.</p>}</div>{email.urls?.length>0&&<div className="detail-section"><h3><Link2 size={15}/> Embedded links</h3>{email.urls.map(x=><div className="embedded-url" key={x}><ExternalLink size={13}/>{x}</div>)}</div>}<div className="detail-note"><LockKeyhole size={14}/> {email.source==='gmail'?GMAIL_LOCAL_ONLY:'This message and its decision are recorded in the ChiefAgent ledger.'}</div></aside></div>}
+function EmailDetail({email,onClose,tone,changeManualQuarantine}){const highlight=s=>{const chars=[...String(s)];return chars.map((c,i)=>{const n=c.codePointAt(0),isSuspicious=n>127;return <span className={isSuspicious?'sus-char':''} title={isSuspicious?`U+${n.toString(16).toUpperCase().padStart(4,'0')} ${c.codePointAt(0).toString(16).toUpperCase()}`:undefined} key={i}>{c}</span>})};return <div className="drawer-backdrop detail-backdrop" onClick={onClose}><aside className="detail-panel" onClick={e=>e.stopPropagation()}><div className="detail-top"><div><div className="eyebrow">MESSAGE FORENSICS <span className="eyebrow-divider">/</span> ID-{String(email.id).padStart(4,'0')}</div><h2>Message details</h2></div><button className="icon-button" onClick={onClose}><X size={17}/></button></div><div className="detail-verdict"><div><span className={`verdict-symbol ${tone(email.verdict)}`}>{tone(email.verdict)==='green'?<ShieldCheck size={18}/>:<ShieldAlert size={18}/>}</span><div><b>{email.verdict==='PENDING'?'Analysis pending':email.source==='gmail'?(email.revoked?'Local decision revoked':`Local verdict: ${email.verdict}`):email.verdict==='ALLOW'?'Message allowed':email.revoked?'Decision revoked':'Message contained'}</b><small>MailAgent decision · Risk score {email.risk_score}/100</small></div></div><Badge tone={tone(email.verdict)}>{email.verdict}</Badge></div><ManualQuarantineControl key={email.id} email={email} change={changeManualQuarantine}/><div className="detail-fields"><div><span>FROM</span><strong>{highlight(email.display_name)} <small>&lt;{highlight(email.sender)}&gt;</small></strong></div><div><span>SUBJECT</span><strong>{email.subject}</strong></div>{email.source==='gmail'&&<div><span>MAIL SOURCE</span><strong>Gmail · {email.source_label}</strong></div>}<div><span>RECEIVED</span><strong>{new Date(email.received_at||email.created_at).toLocaleString()}</strong></div>{email.source==='gmail'&&<div><span>IMPORTED LOCALLY</span><strong>{new Date(email.created_at).toLocaleString()}</strong></div>}</div><div className="detail-section"><h3><FileWarning size={15}/> Rule-based assessment <span>{email.reasons.length}</span></h3><div className="evidence-list">{email.reasons.map((r,i)=><div className="evidence-item" key={i}><span className="evidence-mark"><AlertTriangle size={13}/></span><span>{r}</span></div>)}</div></div><ModelPrediction analysis={email.ml_analysis} pending={!email.processed}/><EmailLinkResults email={email}/><div className="detail-section"><h3><Mail size={15}/> Message body</h3><div className="body-preview">{email.body||'No message body available.'}</div>{email.content_limits?.length>0&&<p className="mail-sync-error">Some content was omitted, truncated, or could not be decoded.</p>}</div>{email.urls?.length>0&&<div className="detail-section"><h3><Link2 size={15}/> Embedded links</h3>{email.urls.map(x=><div className="embedded-url" key={x}><ExternalLink size={13}/>{x}</div>)}</div>}<div className="detail-note"><LockKeyhole size={14}/> {email.source==='gmail'?GMAIL_LOCAL_ONLY:'This message and its decision are recorded in the ChiefAgent ledger.'}</div></aside></div>}
 export default App;

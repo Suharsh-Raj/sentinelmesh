@@ -334,3 +334,12 @@ tbody td { color: #344054; font-size: 12px; }
 .mail-source-status strong { color: #25313d; }
 .mail-sync-error { color: #923c17; }
 .gmail-source-label { display: block; margin-top: 3px; color: #526173; }
+.manual-quarantine-label { display: block; margin-top: 4px; }
+.manual-quarantine-control {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 16px;
+}
+.manual-quarantine-control p { flex-basis: 100%; margin: 0; font-size: 11px; color: #526173; }
